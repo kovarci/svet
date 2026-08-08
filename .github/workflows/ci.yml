@@ -1,0 +1,47 @@
+# Ce que la machine vérifie à chaque poussée.
+#
+# Les 95 tests ne servent à rien s'ils ne tournent que lorsqu'on y pense. Ils
+# couvrent précisément ce qui casse en silence — l'aller-retour binaire, la
+# pondération d'itinéraire, le recalage GPS, la couture des graphes régionaux :
+# des défauts qui ne plantent pas, qui donnent des chiffres plausibles et faux,
+# et qu'on ne remarque donc jamais à l'usage.
+#
+# Rien ici ne demande de réseau ni de données calculées : aucun test ne
+# télécharge quoi que ce soit, et les graphes sont dessinés à la main. La
+# construction du site, elle, est vérifiée parce qu'une erreur d'import ne se
+# voit qu'au moment de l'assemblage — les tests portent sur des modules pris un
+# par un.
+
+name: CI
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+
+jobs:
+  verifier:
+    runs-on: ubuntu-latest
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: npm
+
+      # `npm ci` et non `npm install` : on installe ce que le verrou décrit,
+      # sans le mettre à jour au passage. Un test qui passe ici doit passer sur
+      # la machine de développement, avec les mêmes versions.
+      - run: npm ci
+
+      - run: npm run lint
+
+      - run: npm run format:check
+
+      - run: npm test
+
+      # La construction charge tous les modules ensemble : c'est le seul
+      # contrôle qui attrape un import cassé ou un fichier oublié.
+      - run: npm run build
