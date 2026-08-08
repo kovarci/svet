@@ -1,0 +1,30 @@
+{
+  "name": "@svet/pipeline",
+  "version": "0.1.0",
+  "private": true,
+  "type": "module",
+  "description": "Récupération des données ouvertes + calcul de l'indice d'exposition lumineuse.",
+  "exports": {
+    "./sun": "./src/lib/sun.js",
+    "./model": "./src/model.js",
+    "./config": "./src/config.js"
+  },
+  "scripts": {
+    "build": "node --max-old-space-size=4096 src/build.js",
+    "build:today": "node --max-old-space-size=4096 src/build.js --date=today",
+    "build:paris": "node --max-old-space-size=8192 src/build.js --zone=paris",
+    "build:region": "node build-region.mjs",
+    "fetch": "node src/build.js --fetch-only",
+    "repack": "node --max-old-space-size=4096 repack-tiles.mjs",
+    "refresh": "node refresh.mjs",
+    "validate": "node --max-old-space-size=4096 src/validate-shadows.js",
+    "weigh": "node --max-old-space-size=6144 weigh-binary.mjs",
+    "test": "node --test test/*.test.js",
+    "validate:all": "node validate-campaign.mjs"
+  },
+  "dependencies": {
+    "geojson-vt": "^4.0.3",
+    "pngjs": "^7.0.0",
+    "vt-pbf": "^3.1.3"
+  }
+}

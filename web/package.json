@@ -1,0 +1,18 @@
+{
+  "name": "@svet/web",
+  "version": "0.1.0",
+  "private": true,
+  "type": "module",
+  "scripts": {
+    "dev": "vite",
+    "build": "vite build",
+    "preview": "vite preview"
+  },
+  "dependencies": {
+    "@svet/pipeline": "*",
+    "maplibre-gl": "^5.6.0"
+  },
+  "devDependencies": {
+    "vite": "^6.0.7"
+  }
+}

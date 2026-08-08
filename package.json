@@ -1,0 +1,24 @@
+{
+  "name": "svet",
+  "version": "0.1.0",
+  "private": true,
+  "description": "Carte d'exposition lumineuse de Paris pour les personnes photosensibles — indice d'ombrage et d'ensoleillement rue par rue.",
+  "type": "module",
+  "workspaces": [
+    "pipeline",
+    "web"
+  ],
+  "scripts": {
+    "data": "npm run build --workspace pipeline",
+    "data:today": "npm run build:today --workspace pipeline",
+    "data:paris": "npm run build:paris --workspace pipeline",
+    "data:region": "npm run build:region --workspace pipeline",
+    "validate": "npm run validate --workspace pipeline",
+    "dev": "npm run dev --workspace web",
+    "build": "npm run build --workspace web",
+    "preview": "npm run preview --workspace web",
+    "data:refresh": "npm run refresh --workspace pipeline",
+    "icons": "node pipeline/make-icons.mjs",
+    "test": "npm run test --workspace pipeline"
+  }
+}

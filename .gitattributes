@@ -1,0 +1,9 @@
+# Les sources sont écrites en LF, y compris sous Windows : sans cette ligne,
+# git réécrit chaque fichier en CRLF au premier `checkout` et le diff suivant
+# porte sur l'intégralité du dépôt.
+* text=auto eol=lf
+
+# Fichiers binaires : aucune conversion, et pas de diff textuel.
+*.png binary
+*.bin binary
+*.pbf binary

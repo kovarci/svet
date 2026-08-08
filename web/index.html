@@ -1,0 +1,210 @@
+<!doctype html>
+<html lang="fr">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover" />
+    <title>SVET — carte de l'exposition lumineuse à Paris</title>
+    <meta
+      name="description"
+      content="Indice d'ombrage et d'ensoleillement rue par rue, trottoir par trottoir, et itinéraire piéton à l'abri de la lumière."
+    />
+    <link rel="manifest" href="./manifest.webmanifest" />
+    <link rel="icon" href="./icons/favicon-32.png" sizes="32x32" type="image/png" />
+    <!-- iOS ignore les icônes du manifeste et ne lit que celle-ci. -->
+    <link rel="apple-touch-icon" href="./icons/apple-touch-icon.png" />
+    <meta name="theme-color" content="#0b0f16" />
+    <meta name="mobile-web-app-capable" content="yes" />
+    <meta name="apple-mobile-web-app-capable" content="yes" />
+    <!-- La page passe sous la barre d'état, ce que `viewport-fit=cover` et les
+         retraits `safe-area` de la feuille de style savent désormais gérer. -->
+    <meta name="apple-mobile-web-app-status-bar-style" content="black-translucent" />
+    <meta name="apple-mobile-web-app-title" content="SVET" />
+  </head>
+  <body>
+    <div id="map"></div>
+    <canvas id="shadows"></canvas>
+    <!-- Halo indiquant la direction du soleil par rapport à la carte. -->
+    <div id="sun-ring" aria-hidden="true"></div>
+
+    <header id="topbar">
+      <div class="topbar-row">
+        <div class="brand">
+          <span class="mark">SVET</span>
+          <span class="tagline" id="dataset-date">exposition lumineuse · Paris</span>
+        </div>
+        <!-- Replie les réglages sur petit écran. Sur grand écran ils tiennent
+             dans la barre et ce bouton n'a pas lieu d'être : il est masqué. -->
+        <button id="settings-toggle" class="toggle" type="button"
+                aria-expanded="false" aria-controls="controls" title="Réglages d’affichage">
+          Réglages
+        </button>
+      </div>
+      <div class="controls" id="controls">
+        <label class="field">
+          <span>Zone</span>
+          <select id="zone"></select>
+        </label>
+        <label class="field">
+          <span>Lecture</span>
+          <select id="mode">
+            <option value="index">Indice global</option>
+            <option value="sun">Soleil direct</option>
+            <option value="svf">Ouverture au ciel</option>
+            <option value="glare">Éblouissement</option>
+            <option value="flicker">Scintillement</option>
+            <option value="reverb">Réverbération</option>
+            <option value="night">Éclairage nocturne</option>
+            <option value="uv">Indice UV</option>
+          </select>
+        </label>
+        <label class="field">
+          <span>Trottoirs</span>
+          <select id="side">
+            <option value="both">Les deux</option>
+            <option value="best">Le moins exposé</option>
+            <option value="worst">Le plus exposé</option>
+          </select>
+        </label>
+        <!-- Choix du jour. Seule la météo change : la géométrie des ombres
+             reste celle de la date du calcul. -->
+        <label class="field" id="day-field" hidden>
+          <span>Jour</span>
+          <select id="day"></select>
+        </label>
+        <label class="field">
+          <span>Ciel</span>
+          <select id="sky">
+            <option value="forecast">Météo du jour</option>
+            <option value="clear">Ciel clair</option>
+          </select>
+        </label>
+        <button id="pitch-toggle" class="toggle" type="button" aria-pressed="false" title="Vue en relief">
+          3D
+        </button>
+        <button id="tiles-toggle" class="toggle is-on" type="button" aria-pressed="true"
+                title="Tuiles vectorielles : ne charge que ce qui est affiché">
+          Tuiles
+        </button>
+        <label class="field dimmer-field">
+          <span>Pénombre</span>
+          <input id="dim" type="range" min="0" max="80" step="5" value="0"
+                 aria-label="Assombrir l’interface" />
+        </label>
+      </div>
+
+      <!-- Les deux commandes qu'on cherche en marchant. Elles restent hors du
+           repli : les enfouir dans les réglages coûterait deux gestes à chaque
+           fois, sur le seul écran où les gestes coûtent. -->
+      <div class="actions">
+        <button id="shadow-toggle" class="toggle is-on" type="button" aria-pressed="true">
+          Ombres
+        </button>
+        <button id="route-toggle" class="toggle" type="button" aria-pressed="false">
+          Itinéraire
+        </button>
+      </div>
+    </header>
+
+    <!-- ------------------------------------------------------- itinéraire -->
+    <aside id="route" aria-label="Itinéraire" hidden>
+      <button id="route-close" type="button" aria-label="Fermer">×</button>
+      <h2>Itinéraire</h2>
+
+      <div class="place-field">
+        <label for="from">Départ</label>
+        <div class="place-input">
+          <input id="from" type="text" placeholder="Gare Saint-Lazare…" autocomplete="off"
+                 role="combobox" aria-autocomplete="list" aria-expanded="false"
+                 aria-controls="from-suggestions" />
+          <button class="locate" data-target="from" type="button"
+                  title="Partir de ma position" aria-label="Partir de ma position">⌖</button>
+          <button class="pick" data-target="from" type="button"
+                  title="Choisir sur la carte" aria-label="Choisir le départ sur la carte">◎</button>
+        </div>
+        <ul class="suggestions" id="from-suggestions" role="listbox"
+            aria-label="Suggestions de départ" hidden></ul>
+      </div>
+
+      <div class="place-field">
+        <label for="to">Arrivée</label>
+        <div class="place-input">
+          <input id="to" type="text" placeholder="Musée du Louvre…" autocomplete="off"
+                 role="combobox" aria-autocomplete="list" aria-expanded="false"
+                 aria-controls="to-suggestions" />
+          <button class="locate" data-target="to" type="button"
+                  title="Arriver à ma position" aria-label="Arriver à ma position">⌖</button>
+          <button class="pick" data-target="to" type="button"
+                  title="Choisir sur la carte" aria-label="Choisir l’arrivée sur la carte">◎</button>
+        </div>
+        <ul class="suggestions" id="to-suggestions" role="listbox"
+            aria-label="Suggestions d’arrivée" hidden></ul>
+      </div>
+
+      <div class="tradeoff">
+        <label for="alpha">Priorité</label>
+        <input id="alpha" type="range" min="0" max="60" step="1" value="15" />
+        <div class="tradeoff-ends">
+          <span>le plus rapide</span>
+          <span>le moins de lumière</span>
+        </div>
+      </div>
+
+      <button id="route-go" class="primary" type="button">Calculer</button>
+
+      <div id="route-result"></div>
+    </aside>
+
+    <!-- ------------------------------------------------------ détail rue -->
+    <aside id="panel" aria-label="Détail du tronçon" hidden>
+      <button id="panel-close" type="button" aria-label="Fermer">×</button>
+      <h2 id="panel-title">—</h2>
+      <p id="panel-sub" class="muted"></p>
+      <div id="panel-score"></div>
+      <p id="panel-advice" class="advice"></p>
+      <div id="panel-chart"></div>
+      <div id="panel-stats"></div>
+    </aside>
+
+    <!-- ------------------------------------------------------- guidage -->
+    <!-- `tabindex="-1"` pour recevoir le focus au démarrage du guidage : le
+         panneau d'itinéraire qui le portait disparaît à cet instant. -->
+    <section id="nav" tabindex="-1" aria-label="Guidage" hidden aria-live="polite">
+      <div class="nav-main">
+        <span class="nav-arrow" id="nav-arrow">↑</span>
+        <div class="nav-text">
+          <strong id="nav-instruction">—</strong>
+          <span class="nav-side" id="nav-side"></span>
+        </div>
+        <span class="nav-distance" id="nav-distance"></span>
+      </div>
+      <div class="nav-foot">
+        <span id="nav-remaining" class="muted"></span>
+        <span id="nav-exposure" class="muted"></span>
+        <button id="nav-voice" class="toggle is-on" type="button" aria-pressed="true"
+                title="Annonces vocales">🔊</button>
+        <button id="nav-follow" class="toggle is-on" type="button" aria-pressed="true">Suivre</button>
+        <button id="nav-stop" class="toggle" type="button">Arrêter</button>
+      </div>
+    </section>
+
+    <footer id="timebar">
+      <div class="time-head">
+        <button id="play" type="button" aria-label="Animer la journée">▶</button>
+        <strong id="clock">—</strong>
+        <span id="sun-info" class="muted"></span>
+        <span id="sky-info" class="muted sky-info"></span>
+      </div>
+      <input id="time" type="range" min="0" max="1" step="1" value="0" aria-label="Heure" />
+      <div id="legend" class="legend"></div>
+      <!-- Ce que mesure le mode de lecture courant. Sans cette ligne, huit modes
+           se choisissent dans un menu sans que rien ne dise ce qu'ils montrent. -->
+      <p id="mode-note" class="mode-note"></p>
+    </footer>
+
+    <div id="loading" role="status" aria-live="polite">Chargement des données…</div>
+    <!-- Voile d'assombrissement, au-dessus de tout, réglé par « Pénombre ». -->
+    <div id="dimmer" aria-hidden="true"></div>
+
+    <script type="module" src="/src/main.js"></script>
+  </body>
+</html>

@@ -1,0 +1,9 @@
+node_modules/
+dist/
+pipeline/cache/
+pipeline/validation/
+web/public/data/
+*.log
+
+# Réglages propres à la machine : chemins, permissions d'outillage.
+.claude/settings.local.json
