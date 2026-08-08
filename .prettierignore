@@ -1,0 +1,10 @@
+node_modules
+web/dist
+web/public/data
+pipeline/cache
+pipeline/validation
+package-lock.json
+
+# Le README est mis en forme à la main : ses tableaux sont alignés pour être
+# lisibles en texte brut, et Prettier les réécrirait.
+README.md

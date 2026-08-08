@@ -19,6 +19,15 @@
     "preview": "npm run preview --workspace web",
     "data:refresh": "npm run refresh --workspace pipeline",
     "icons": "node pipeline/make-icons.mjs",
-    "test": "npm run test --workspace pipeline"
+    "test": "npm run test --workspace pipeline && npm run test --workspace web",
+    "lint": "eslint .",
+    "format": "prettier --write .",
+    "format:check": "prettier --check ."
+  },
+  "devDependencies": {
+    "eslint": "^9.39.5",
+    "eslint-config-prettier": "^9.1.2",
+    "globals": "^15.15.0",
+    "prettier": "^3.9.6"
   }
 }

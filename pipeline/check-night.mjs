@@ -18,7 +18,7 @@ const data = decodeZoneData(
 
 const unknown = new Map();
 const dark = new Map();
-let counts = { known: 0, unknown: 0, darkButKnown: 0 };
+const counts = { known: 0, unknown: 0, darkButKnown: 0 };
 
 for (let id = 0; id < data.segmentCount; id++) {
   const s = data.segmentAt(id);
@@ -46,11 +46,15 @@ console.log(
     `(${((100 * counts.darkButKnown) / Math.max(1, counts.known)).toFixed(1)} % des renseignés)\n`,
 );
 
-console.log('  Hors jeu de données — les dix voies les plus citées (attendu : communes limitrophes) :');
+console.log(
+  '  Hors jeu de données — les dix voies les plus citées (attendu : communes limitrophes) :',
+);
 for (const [name, n] of [...unknown].sort((a, b) => b[1] - a[1]).slice(0, 10)) {
   console.log(`    ${String(n).padStart(5)}  ${name}`);
 }
-console.log('\n  Renseignés mais sans lampadaire — les dix premières (attendu : bois, berges, voies ferrées) :');
+console.log(
+  '\n  Renseignés mais sans lampadaire — les dix premières (attendu : bois, berges, voies ferrées) :',
+);
 for (const [name, n] of [...dark].sort((a, b) => b[1] - a[1]).slice(0, 10)) {
   console.log(`    ${String(n).padStart(5)}  ${name}`);
 }
