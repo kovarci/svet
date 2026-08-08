@@ -2386,7 +2386,17 @@ function setOfflinePanel(open) {
 }
 
 async function runOffline() {
+  // Le plan est refait au moment du clic, et non repris de l'ouverture du
+  // panneau : la carte a pu bouger derrière, et c'est bien ce qu'on voit
+  // maintenant qu'on veut emporter. Mais alors le garde-fou de volume, posé à
+  // l'ouverture, ne vaut plus rien — il faut le reposer ici, sinon un
+  // dézoomage entre les deux gestes lance le téléchargement de la région.
   const plan = offlinePlan();
+  if (plan.tiles > MAX_PREFETCH_TILES) {
+    setOfflinePanel(true);
+    return;
+  }
+
   dom.offlineGo.disabled = true;
   dom.offlineResult.innerHTML = `<p class="muted">Téléchargement… 0 %</p>`;
 
