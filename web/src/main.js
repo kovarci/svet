@@ -4,13 +4,36 @@ import './style.css';
 
 import { createShadowLayer } from './shadows.js';
 import { CLEAR_SKY, fetchForecast, skyLabel } from './weather.js';
-import { prepareGraph, findRoute, nearestNode, summarize } from './routing.js';
+import {
+  prepareGraph,
+  findRoute,
+  nearestNode,
+  summarize,
+  transitions,
+  SearchAborted,
+} from './routing.js';
 import { ensureNotFallbackPage, loadZoneData } from './binary.js';
 import { createRegionData, loadRegionIndex } from './cells.js';
-import { indexStreetNames, searchLocal, searchRemote } from './geocode.js';
+import {
+  indexStreetNames,
+  mergeSuggestions,
+  searchAddresses,
+  searchLocal,
+  searchRemote,
+} from './geocode.js';
+import { readRoute, writeRoute } from './link.js';
+import {
+  MAX_PREFETCH_TILES,
+  buildPlan,
+  cellBytes,
+  formatBytes,
+  prefetch,
+  tilesInBounds,
+} from './offline.js';
 import { createVoice, phraseFor } from './speech.js';
 import {
   OFF_ROUTE_METERS,
+  advanceProgress,
   bearingBetween,
   buildInstructions,
   describeManoeuvre,
@@ -37,7 +60,6 @@ const FALLBACK_BASEMAP = {
   layers: [{ id: 'fond', type: 'background', paint: { 'background-color': '#0b0f16' } }],
 };
 
-const RAD = Math.PI / 180;
 const PARIS_LAT = 48.8566;
 const PARIS_LON = 2.3522;
 
@@ -70,7 +92,14 @@ const MODES = {
   glare: {
     label: 'Éblouissement',
     max: 100,
-    note: 'Soleil assez bas pour arriver dans l’axe du regard ; au-delà de 50°, il faut lever la tête.',
+    // La convention doit être dite. L'éblouissement dépend du cap de marche —
+    // marcher face à un soleil rasant n'a rien à voir avec le parcourir en sens
+    // inverse — et une carte ne connaît pas le sens dans lequel on prendra la
+    // rue. Elle affiche donc le pire cas, soleil de face, là où le calcul
+    // d'itinéraire évalue chaque tronçon dans le sens réellement parcouru. Sans
+    // cette phrase, la même rue portait deux chiffres différents selon
+    // l'endroit où on la lisait, sans que rien ne l'explique.
+    note: 'Soleil assez bas pour arriver dans l’axe du regard, compté de face — l’itinéraire, lui, tient compte de votre sens de marche.',
   },
   flicker: {
     label: 'Scintillement',
@@ -104,13 +133,64 @@ const UV_LEGEND = [
 
 const dom = Object.fromEntries(
   [
-    'loading', 'zone', 'mode', 'side', 'sky', 'shadow-toggle', 'route-toggle', 'time', 'clock',
-    'sun-info', 'sky-info', 'play', 'legend', 'panel', 'panel-close', 'panel-title', 'panel-sub',
-    'panel-score', 'panel-advice', 'panel-chart', 'panel-stats', 'route', 'route-close', 'from',
-    'to', 'from-suggestions', 'to-suggestions', 'alpha', 'route-go', 'route-result',
-    'sun-ring', 'dataset-date', 'pitch-toggle', 'tiles-toggle', 'nav', 'nav-arrow', 'nav-instruction', 'nav-side',
-    'nav-distance', 'nav-remaining', 'nav-exposure', 'nav-follow', 'nav-voice', 'nav-stop', 'timebar',
-    'dim', 'day', 'day-field', 'topbar', 'controls', 'settings-toggle', 'mode-note',
+    'loading',
+    'zone',
+    'mode',
+    'side',
+    'sky',
+    'shadow-toggle',
+    'route-toggle',
+    'time',
+    'clock',
+    'sun-info',
+    'sky-info',
+    'play',
+    'legend',
+    'panel',
+    'panel-close',
+    'panel-title',
+    'panel-sub',
+    'panel-score',
+    'panel-advice',
+    'panel-chart',
+    'panel-stats',
+    'route',
+    'route-close',
+    'from',
+    'to',
+    'from-suggestions',
+    'to-suggestions',
+    'alpha',
+    'route-go',
+    'route-result',
+    'sun-ring',
+    'dataset-date',
+    'pitch-toggle',
+    'tiles-toggle',
+    'nav',
+    'nav-arrow',
+    'nav-instruction',
+    'nav-side',
+    'nav-distance',
+    'nav-remaining',
+    'nav-exposure',
+    'nav-follow',
+    'nav-voice',
+    'nav-stop',
+    'timebar',
+    'dim',
+    'day',
+    'day-field',
+    'topbar',
+    'controls',
+    'settings-toggle',
+    'mode-note',
+    'offline-toggle',
+    'offline',
+    'offline-close',
+    'offline-estimate',
+    'offline-go',
+    'offline-result',
   ].map((id) => [id.replace(/-(.)/g, (_, c) => c.toUpperCase()), document.getElementById(id)]),
 );
 
@@ -152,6 +232,9 @@ const state = {
   places: { from: null, to: null },
   picking: null,
   route: null,
+  /** Options et extrémités de la dernière recherche — voir `exploreDepartures`. */
+  routeOptions: null,
+  routeEnds: null,
   nav: null,
   /** Géométrie servie en tuiles, ou chargée d'un bloc. */
   tiled: true,
@@ -206,6 +289,74 @@ const prefs = {
 let map;
 let shadows;
 const voice = createVoice();
+
+/**
+ * Animations de caméra, ou pas.
+ *
+ * La feuille de style respecte déjà `prefers-reduced-motion`, mais elle ne peut
+ * rien sur MapLibre : les déplacements de caméra sont pilotés en JavaScript, et
+ * c'est justement le mouvement le plus présent de l'application — pendant le
+ * guidage, la carte glisse à chaque point GPS, soit une fois par seconde,
+ * pendant toute la marche. Chez un public migraineux, c'est exactement ce qu'on
+ * désactive.
+ *
+ * On ne supprime donc pas le recentrage, qui porte une information, mais sa
+ * durée : la caméra saute au lieu de glisser.
+ */
+const reducedMotion = window.matchMedia?.('(prefers-reduced-motion: reduce)') ?? { matches: false };
+
+function motionDuration(milliseconds) {
+  return reducedMotion.matches ? 0 : milliseconds;
+}
+
+/**
+ * Verrou d'écran : empêche le téléphone de se verrouiller pendant le guidage.
+ *
+ * C'était le plus gros écart entre ce que l'application promet et ce qu'elle
+ * fait dehors. Un guidage piéton se consulte par coups d'œil, pas en continu :
+ * au bout de trente secondes sans toucher l'écran, le téléphone se verrouille,
+ * la page passe en arrière-plan, et l'annonce suivante tombe dans le vide.
+ *
+ * Trois points de détail qui décident si ça marche vraiment :
+ *
+ *  - Le verrou est **perdu à chaque passage en arrière-plan**, sans erreur ni
+ *    message — c'est le comportement normal. Il faut donc le redemander au
+ *    retour, sans quoi il ne tient que jusqu'au premier appel reçu.
+ *  - Il ne s'obtient que sur un document **visible** et en contexte sécurisé.
+ *    Le démarrage du guidage étant un clic, la première demande passe ; les
+ *    suivantes sont gardées par `document.hidden`.
+ *  - Un refus n'est pas une panne. Batterie faible, économiseur d'énergie,
+ *    navigateur sans l'API : le guidage fonctionne quand même, il faut
+ *    seulement rallumer l'écran. On le note dans la console, sans rien dire à
+ *    l'écran — ce serait un avertissement de plus sur le seul bandeau qu'on lit
+ *    en marchant.
+ */
+const screenLock = {
+  sentinel: null,
+
+  async acquire() {
+    if (!('wakeLock' in navigator) || document.hidden || this.sentinel) return;
+    try {
+      this.sentinel = await navigator.wakeLock.request('screen');
+      // Le relâchement peut venir du système ; on tient l'état à jour pour que
+      // le retour au premier plan sache qu'il faut redemander.
+      this.sentinel.addEventListener('release', () => {
+        this.sentinel = null;
+      });
+    } catch (error) {
+      console.warn('Écran maintenu allumé : impossible —', error.message);
+    }
+  },
+
+  release() {
+    this.sentinel?.release().catch(() => {});
+    this.sentinel = null;
+  },
+};
+
+document.addEventListener('visibilitychange', () => {
+  if (!document.hidden && state.nav) screenLock.acquire();
+});
 
 start().catch(fail);
 
@@ -273,6 +424,13 @@ async function start() {
   await loadZone(zone.key);
   dom.loading.classList.add('is-hidden');
   registerServiceWorker();
+
+  // L'itinéraire du lien vient après les données : il lui faut le graphe. Un
+  // échec ici — deux points hors zone, réseau coupé — ne doit pas emporter le
+  // démarrage : la carte, elle, est déjà là et parfaitement utilisable.
+  await restoreRouteFromUrl().catch((error) => {
+    console.warn('Itinéraire du lien non rétabli :', error.message);
+  });
 }
 
 /**
@@ -379,7 +537,10 @@ async function loadZone(key) {
   state.streets = indexStreetNames(data, state.graph);
 
   // Midi solaire par défaut : le moment le plus discriminant de la journée.
-  const noon = meta.times.reduce((best, t, i, all) => (t.altitude > all[best].altitude ? i : best), 0);
+  const noon = meta.times.reduce(
+    (best, t, i, all) => (t.altitude > all[best].altitude ? i : best),
+    0,
+  );
   state.minutes = meta.times[noon].minutes;
 
   dom.time.min = String(meta.times[0].minutes);
@@ -453,7 +614,10 @@ async function loadRegion(entry) {
   state.tiled = true;
   dom.tilesToggle.hidden = true;
 
-  const noon = index.times.reduce((best, t, i, all) => (t.altitude > all[best].altitude ? i : best), 0);
+  const noon = index.times.reduce(
+    (best, t, i, all) => (t.altitude > all[best].altitude ? i : best),
+    0,
+  );
   state.minutes = index.times[noon].minutes;
   dom.time.min = String(index.times[0].minutes);
   dom.time.max = String(index.times[index.times.length - 1].minutes);
@@ -584,7 +748,10 @@ function renderDayChoices() {
     if (days === 0) return "aujourd'hui";
     if (days === 1) return 'demain';
     if (days === 2) return 'après-demain';
-    return new Date(`${iso}T12:00:00Z`).toLocaleDateString('fr-FR', { weekday: 'long', day: 'numeric' });
+    return new Date(`${iso}T12:00:00Z`).toLocaleDateString('fr-FR', {
+      weekday: 'long',
+      day: 'numeric',
+    });
   };
 
   dom.day.innerHTML = dates.map((d) => `<option value="${d}">${label(d)}</option>`).join('');
@@ -665,20 +832,31 @@ function buildingsForShadows() {
   return state.tiled ? { source: 'network', sourceLayer: 'bati' } : { features: state.buildings };
 }
 
-async function addLayers() {
-  const { minZoom, maxZoom, bounds } = state.meta.tiles ?? { minZoom: 11, maxZoom: 16 };
+/**
+ * Gabarit d'URL de la pyramide courante, version comprise.
+ *
+ * Absolu : MapLibre l'exige, et le pré-chargement hors ligne doit demander
+ * exactement les mêmes URLs que la carte, sans quoi il remplirait le cache de
+ * clés que personne ne relira jamais.
+ */
+function tileTemplate() {
   const base = `${location.origin}${location.pathname.replace(/[^/]*$/, '')}`;
   // Une région n'a pas de version « tout chargé » : c'est précisément ce qu'on
   // ne peut pas faire à cette taille. Sa pyramide est commune à ses cellules.
-  const tilePath = state.region
+  const path = state.region
     ? `data/${state.meta.region}/tuiles/{z}/{x}/{y}.pbf`
     : `data/${state.zoneKey}/{z}/{x}/{y}.pbf`;
+  return `${base}${path}${state.version}`;
+}
+
+async function addLayers() {
+  const { minZoom, maxZoom, bounds } = state.meta.tiles ?? { minZoom: 11, maxZoom: 16 };
 
   if (state.tiled || state.region) {
     state.buildings = null;
     map.addSource('network', {
       type: 'vector',
-      tiles: [`${base}${tilePath}${state.version}`],
+      tiles: [tileTemplate()],
       minzoom: minZoom,
       maxzoom: maxZoom,
       // L'emprise de la zone. Sans elle, dès qu'on longe le bord, MapLibre
@@ -710,8 +888,6 @@ async function addLayers() {
     map.addSource('me', { type: 'geojson', data: emptyCollection() });
   }
 
-
-
   for (const side of ['left', 'right']) {
     map.addLayer({
       id: `network-${side}`,
@@ -738,7 +914,15 @@ async function addLayers() {
     paint: {
       'line-color': '#3d5570',
       'line-width': ['interpolate', ['linear'], ['zoom'], 11, 0.5, 13.5, 1.6],
-      'line-opacity': ['interpolate', ['linear'], ['zoom'], READABLE_ZOOM, 0.9, READABLE_ZOOM + 0.5, 0],
+      'line-opacity': [
+        'interpolate',
+        ['linear'],
+        ['zoom'],
+        READABLE_ZOOM,
+        0.9,
+        READABLE_ZOOM + 0.5,
+        0,
+      ],
     },
   });
 
@@ -772,10 +956,15 @@ async function addLayers() {
         // l'écran ; une ville en gris clair ferait de l'application une source
         // de lumière, ce qu'on demande précisément à ce public d'éviter. Le
         // relief vient du contraste entre les faces, pas de la clarté générale.
-        'interpolate', ['linear'], ['coalesce', ['get', 'h'], 12],
-        6, '#242b36',
-        20, '#333d4c',
-        45, '#4a566b',
+        'interpolate',
+        ['linear'],
+        ['coalesce', ['get', 'h'], 12],
+        6,
+        '#242b36',
+        20,
+        '#333d4c',
+        45,
+        '#4a566b',
       ],
       'fill-extrusion-height': ['coalesce', ['get', 'h'], 12],
       'fill-extrusion-base': 0,
@@ -907,11 +1096,17 @@ function ensureVisibleCells() {
 
 function widthExpression(extra) {
   return [
-    'interpolate', ['exponential', 1.6], ['zoom'],
-    12, 0.8 + extra * 0.2,
-    15, 2 + extra * 0.4,
-    17, 4.5 + extra * 0.8,
-    19, 9 + extra * 1.4,
+    'interpolate',
+    ['exponential', 1.6],
+    ['zoom'],
+    12,
+    0.8 + extra * 0.2,
+    15,
+    2 + extra * 0.4,
+    17,
+    4.5 + extra * 0.8,
+    19,
+    9 + extra * 1.4,
   ];
 }
 
@@ -927,15 +1122,22 @@ function offsetExpression(side) {
   const property = side === 'left' ? 'lOff' : 'rOff';
   const perMeter = (zoom) => (sign * Math.pow(2, zoom)) / 102900;
   return [
-    'interpolate', ['exponential', 2], ['zoom'],
-    13, ['*', ['get', property], perMeter(13)],
-    19, ['*', ['get', property], perMeter(19)],
+    'interpolate',
+    ['exponential', 2],
+    ['zoom'],
+    13,
+    ['*', ['get', property], perMeter(13)],
+    19,
+    ['*', ['get', property], perMeter(19)],
   ];
 }
 
 function colorExpression(key) {
-  const stops = (state.mode === 'uv' ? UV_LEGEND.map((s) => ({ ...s, value: (s.value / 11) * 100 })) : state.meta.scale)
-    .flatMap((s) => [s.value, s.color]);
+  const stops = (
+    state.mode === 'uv'
+      ? UV_LEGEND.map((s) => ({ ...s, value: (s.value / 11) * 100 }))
+      : state.meta.scale
+  ).flatMap((s) => [s.value, s.color]);
   return ['interpolate', ['linear'], ['coalesce', ['feature-state', key], 0], ...stops];
 }
 
@@ -1179,8 +1381,10 @@ function applyTime() {
         'interpolate',
         ['linear'],
         ['zoom'],
-        READABLE_ZOOM, 0,
-        READABLE_ZOOM + 0.5, dim,
+        READABLE_ZOOM,
+        0,
+        READABLE_ZOOM + 0.5,
+        dim,
       ]);
     }
   }
@@ -1224,8 +1428,7 @@ function renderSunRing(context) {
   // gêne le plus. Les nuages le diluent — sous une couche épaisse, la lumière
   // n'a plus vraiment de direction — mais sans le faire disparaître : par ciel
   // couvert on veut encore savoir où il est.
-  const strength =
-    Math.min(1, altitudeDeg / 3) * (1 - 0.55 * (context.weather.cloud ?? 0));
+  const strength = Math.min(1, altitudeDeg / 3) * (1 - 0.55 * (context.weather.cloud ?? 0));
 
   style.setProperty('--sun-angle', `${angle.toFixed(1)}deg`);
   style.setProperty('--sun-core', `rgba(${red}, ${green}, ${blue}, 1)`);
@@ -1282,7 +1485,7 @@ function setPitched(pitched) {
   dom.pitchToggle.setAttribute('aria-pressed', String(pitched));
 
   map.setMaxPitch(pitched ? 68 : 0);
-  map.easeTo({ pitch: pitched ? 55 : 0, duration: 700 });
+  map.easeTo({ pitch: pitched ? 55 : 0, duration: motionDuration(700) });
   if (map.getLayer('buildings-3d')) {
     map.setLayoutProperty('buildings-3d', 'visibility', pitched ? 'visible' : 'none');
   }
@@ -1340,7 +1543,11 @@ function applySunLight(context) {
 function refreshLayers() {
   for (const side of ['left', 'right']) {
     map.setPaintProperty(`network-${side}`, 'line-offset', offsetExpression(side));
-    map.setPaintProperty(`network-${side}`, 'line-color', colorExpression(side === 'left' ? 'l' : 'r'));
+    map.setPaintProperty(
+      `network-${side}`,
+      'line-color',
+      colorExpression(side === 'left' ? 'l' : 'r'),
+    );
   }
   applyTime();
 }
@@ -1423,7 +1630,10 @@ function paintVisible(context, nearFieldOnly = false) {
   let query = { layers: ['network-left'] };
   if (nearFieldOnly && state.pitched) {
     const { clientWidth: width, clientHeight: height } = map.getContainer();
-    query = [[0, height * 0.35], [width, height]];
+    query = [
+      [0, height * 0.35],
+      [width, height],
+    ];
   }
   const features = map.queryRenderedFeatures(
     Array.isArray(query) ? query : undefined,
@@ -1525,6 +1735,24 @@ async function loadRouteCorridor(from, to) {
  */
 const MAX_ROUTE_CELLS = 14;
 
+/**
+ * Recherche en cours, s'il y en a une.
+ *
+ * Le curseur de priorité relance le calcul à chaque relâchement, et rien
+ * n'empêche d'en relancer un pendant qu'un autre tourne. Tant que la recherche
+ * bloquait le fil, la question ne se posait pas — elle finissait avant que le
+ * geste suivant soit possible. Découpée en tranches, elle peut désormais en
+ * croiser une autre, et c'est la plus lente qui écrirait la dernière dans le
+ * panneau : on abandonne donc la précédente.
+ */
+let searchController = null;
+
+function beginSearch() {
+  searchController?.abort();
+  searchController = new AbortController();
+  return searchController.signal;
+}
+
 async function computeRoute() {
   const { from, to } = state.places;
   if (!from || !to) {
@@ -1575,11 +1803,25 @@ async function computeRoute() {
     evaluate: evaluateSegment,
   };
 
+  const signal = beginSearch();
   const t0 = performance.now();
-  const route = findRoute(graph, start.node, goal.node, options);
-  // Le trajet le plus court sert de référence : sans lui, « 6 minutes de plus »
-  // ne veut rien dire.
-  const fastest = findRoute(graph, start.node, goal.node, { ...options, alpha: 0 });
+  let route;
+  let fastest;
+  try {
+    dom.routeGo.disabled = true;
+    dom.routeResult.innerHTML = `<p class="muted">Calcul de l’itinéraire…</p>`;
+    route = await findRoute(graph, start.node, goal.node, { ...options, signal });
+    // Le trajet le plus court sert de référence : sans lui, « 6 minutes de plus »
+    // ne veut rien dire.
+    fastest = await findRoute(graph, start.node, goal.node, { ...options, alpha: 0, signal });
+  } catch (error) {
+    // Une recherche abandonnée n'a rien à dire : une autre est déjà partie, et
+    // c'est elle qui écrira dans le panneau.
+    if (error instanceof SearchAborted) return;
+    throw error;
+  } finally {
+    dom.routeGo.disabled = false;
+  }
   const elapsed = Math.round(performance.now() - t0);
 
   if (!route) {
@@ -1588,21 +1830,31 @@ async function computeRoute() {
   }
 
   state.route = route;
+  // Gardés pour « quand partir ? », qui refait la même recherche à d'autres
+  // heures : rien d'autre ne change, et retrouver les deux nœuds coûte un
+  // parcours complet du graphe.
+  state.routeOptions = options;
+  state.routeEnds = { start: start.node, goal: goal.node };
   drawRoute(route);
   renderRouteResult(route, fastest, elapsed);
+  rememberRouteInUrl();
 }
 
 function drawRoute(route) {
   map.getSource('route').setData({
     type: 'FeatureCollection',
     features: [
-      { type: 'Feature', geometry: { type: 'LineString', coordinates: route.coordinates }, properties: {} },
+      {
+        type: 'Feature',
+        geometry: { type: 'LineString', coordinates: route.coordinates },
+        properties: {},
+      },
     ],
   });
 
   const bounds = new maplibregl.LngLatBounds();
   for (const coord of route.coordinates) bounds.extend(coord);
-  if (!bounds.isEmpty()) map.fitBounds(bounds, { padding: 90, duration: 600 });
+  if (!bounds.isEmpty()) map.fitBounds(bounds, { padding: 90, duration: motionDuration(600) });
 }
 
 function renderRouteResult(route, fastest, elapsed) {
@@ -1613,6 +1865,7 @@ function renderRouteResult(route, fastest, elapsed) {
 
   const legs = summarize(route);
   const arrival = formatClock(route.arrivalMinutes);
+  const jumps = transitions(route);
 
   dom.routeResult.innerHTML = `
     <div class="route-head">
@@ -1638,6 +1891,27 @@ function renderRouteResult(route, fastest, elapsed) {
               : `C'est déjà le trajet le plus court.`
       }
     </p>
+    ${
+      jumps.length === 0
+        ? ''
+        : `<div class="jumps">
+            <h3>${jumps.length === 1 ? 'Un passage brutal' : `${jumps.length} passages brutaux`} à l’ombre → plein soleil</h3>
+            <ul>
+              ${jumps
+                .map(
+                  (jump) => `<li>
+                    <span class="jump-at">${formatMeters(jump.distance)}</span>
+                    ${jump.name ? escapeHtml(jump.name) : 'sans nom'} —
+                    l’indice passe de <strong>${jump.before}</strong> à
+                    <strong style="color:${colorFor(jump.after)}">${jump.after}</strong>.
+                  </li>`,
+                )
+                .join('')}
+            </ul>
+            <p class="muted">L’œil n’a pas le temps de s’adapter : c’est là que ça fait
+              le plus mal, même quand la moyenne du trajet reste basse.</p>
+          </div>`
+    }
     <ol class="legs">
       ${legs
         .map(
@@ -1654,9 +1928,140 @@ function renderRouteResult(route, fastest, elapsed) {
     </ol>
     <p class="muted route-timing">Calculé en ${elapsed} ms · l'exposition est évaluée à l'heure
       où vous passerez réellement, le soleil tournant de 15° par heure.</p>
-    <button id="route-navigate" class="ghost" type="button">Démarrer le guidage</button>`;
+    <div id="departures"></div>
+    <div class="route-actions">
+      <button id="route-when" class="ghost" type="button">Quand partir ?</button>
+      <button id="route-navigate" class="ghost" type="button">Démarrer le guidage</button>
+    </div>`;
 
   document.getElementById('route-navigate').addEventListener('click', startNavigation);
+  document.getElementById('route-when').addEventListener('click', () => {
+    exploreDepartures().catch((error) => {
+      if (error instanceof SearchAborted) return;
+      fail(error);
+    });
+  });
+}
+
+// ------------------------------------------------------------ quand partir ?
+
+/** Pas et portée de l'exploration des heures de départ. */
+const DEPARTURE_STEP = 15;
+const DEPARTURE_SPAN = 180;
+
+/**
+ * Refait le même trajet à d'autres heures de départ.
+ *
+ * C'est la question que se pose vraiment quelqu'un de photophobe, et
+ * l'application n'y répondait pas. Elle savait dire « voici le chemin le moins
+ * exposé » ; elle ne savait pas dire « attendez quarante-cinq minutes et le
+ * même trajet vous coûtera vingt points de moins », alors que tout était là
+ * pour le calculer — le coût d'une arête dépend déjà de l'heure où l'on y
+ * passe.
+ *
+ * On **refait la recherche** à chaque heure, plutôt que de réévaluer le tracé
+ * trouvé pour l'heure courante. C'est plus cher, mais c'est la seule réponse
+ * honnête : le meilleur chemin de 15 h n'est pas celui de 18 h, et se contenter
+ * de rejouer le premier ferait passer pour une fatalité ce qui n'est qu'un
+ * mauvais choix d'itinéraire.
+ *
+ * L'exploration est bornée à la plage calculée : proposer un départ à 23 h
+ * quand les séries s'arrêtent au coucher du soleil donnerait une courbe plate
+ * et fausse.
+ */
+async function exploreDepartures() {
+  const { routeOptions, routeEnds } = state;
+  const graph = currentGraph();
+  if (!routeOptions || !routeEnds || !graph) return;
+
+  const box = document.getElementById('departures');
+  const last = Number(dom.time.max);
+  const departures = [];
+  for (
+    let at = state.minutes;
+    at <= state.minutes + DEPARTURE_SPAN && at <= last;
+    at += DEPARTURE_STEP
+  ) {
+    departures.push(Math.round(at));
+  }
+  if (departures.length < 2) {
+    box.innerHTML = `<p class="muted">Il ne reste pas assez de journée calculée pour
+      comparer plusieurs départs.</p>`;
+    return;
+  }
+
+  const signal = beginSearch();
+  const results = [];
+  for (const minutes of departures) {
+    box.innerHTML = `<p class="muted">Comparaison des départs… ${results.length + 1}/${departures.length}</p>`;
+    const route = await findRoute(graph, routeEnds.start, routeEnds.goal, {
+      ...routeOptions,
+      departureMinutes: minutes,
+      signal,
+    });
+    // Un départ sans chemin ne devrait pas exister — le graphe n'a pas changé —
+    // mais on préfère un trou dans la courbe à une exception en pleine boucle.
+    if (route) results.push({ minutes, index: route.index, seconds: route.seconds });
+  }
+
+  renderDepartures(box, results);
+}
+
+function renderDepartures(box, results) {
+  if (results.length === 0) {
+    box.innerHTML = '';
+    return;
+  }
+
+  const best = results.reduce((a, b) => (b.index < a.index ? b : a));
+  const current = results[0];
+  const peak = Math.max(...results.map((r) => r.index), 1);
+  const gain = Math.round(current.index - best.index);
+
+  box.innerHTML = `
+    <div class="departures">
+      <h3>Quand partir ?</h3>
+      <div class="departure-bars" role="group" aria-label="Indice moyen selon l’heure de départ">
+        ${results
+          .map(
+            (r) => `
+          <button type="button" class="departure${r === best ? ' is-best' : ''}"
+                  data-minutes="${r.minutes}"
+                  aria-label="Départ à ${formatClock(r.minutes)}, indice ${Math.round(r.index)}"
+                  title="Départ à ${formatClock(r.minutes)} — indice ${Math.round(r.index)}, ${Math.round(r.seconds / 60)} min">
+            <span class="departure-bar" style="height:${Math.max(4, (r.index / peak) * 100)}%;
+                  background:${colorFor(r.index)}"></span>
+            <span class="departure-time">${
+              // Une heure pleine sur quatre barres : treize étiquettes de cinq
+              // chiffres ne tiennent pas dans la largeur du panneau, et les
+              // empiler en biais les rendrait illisibles. Le survol et le
+              // libellé accessible portent l'heure exacte de chaque barre.
+              r.minutes % 60 === 0 ? `${Math.floor(r.minutes / 60)}h` : ''
+            }</span>
+          </button>`,
+          )
+          .join('')}
+      </div>
+      <p class="muted">${
+        gain >= 3
+          ? `En partant à <strong>${formatClock(best.minutes)}</strong> plutôt que maintenant,
+             le même trajet passe de ${Math.round(current.index)} à
+             <strong>${Math.round(best.index)}</strong> — ${gain} points de moins.`
+          : `Attendre ne change presque rien sur les trois prochaines heures :
+             l’écart reste sous ${Math.max(1, gain)} point.`
+      }</p>
+    </div>`;
+
+  box.querySelector('.departure-bars').addEventListener('click', (event) => {
+    const button = event.target.closest('.departure');
+    if (!button) return;
+    // Adopter un départ, c'est déplacer l'heure de toute la carte : les couleurs
+    // des rues doivent montrer ce qu'on vient de choisir, pas l'heure d'avant.
+    state.minutes = Number(button.dataset.minutes);
+    dom.time.value = String(state.minutes);
+    applyTime();
+    computeRoute().catch(fail);
+  });
 }
 
 // ------------------------------------------------------------------ guidage
@@ -1685,6 +2090,11 @@ function startNavigation() {
 
   state.nav = {
     instructions: buildInstructions(state.route),
+    // Les passages ombre → plein soleil sont repérés une fois, au départ : ils
+    // dépendent de l'heure de passage prévue, et la recalculer à chaque pas
+    // ferait varier l'avertissement sous les pieds de celui qui marche.
+    transitions: transitions(state.route),
+    warnedTransitions: new Set(),
     hint: null,
     following: true,
     offRoute: false,
@@ -1707,6 +2117,11 @@ function startNavigation() {
 
   // L'horloge suit désormais le temps réel, et non plus le curseur.
   followRealClock();
+
+  // Demandé ici, sur le clic : le document est visible et actif, seul moment où
+  // le verrou s'obtient.
+  screenLock.acquire();
+  rememberRouteInUrl();
 
   // Le clic qui démarre le guidage est le geste utilisateur dont iOS et Chrome
   // mobile ont besoin pour autoriser la synthèse vocale. On le consomme ici.
@@ -1735,14 +2150,16 @@ function stopNavigation() {
   if (state.nav.watchId !== null) navigator.geolocation.clearWatch(state.nav.watchId);
   voice.speak('', { interrupt: true });
   clearInterval(state.nav.clockTimer);
+  screenLock.release();
   state.nav = null;
+  rememberRouteInUrl();
 
   if (dom.nav.contains(document.activeElement)) dom.routeToggle.focus();
   dom.nav.hidden = true;
   dom.nav.classList.remove('is-off-route');
   dom.timebar.hidden = false;
   map.getSource('me').setData(emptyCollection());
-  map.easeTo({ bearing: 0, duration: 300 });
+  map.easeTo({ bearing: 0, duration: motionDuration(300) });
 }
 
 /** Aligne l'heure simulée sur l'heure réelle, et la maintient. */
@@ -1769,16 +2186,9 @@ function onPosition(position) {
   state.nav.hint = fix.index;
   state.nav.offRoute = fix.offset > OFF_ROUTE_METERS;
 
-  // Progression forcée monotone. Le bruit du GPS fait reculer la position
-  // recalée de plusieurs mètres d'une mesure à l'autre — mesuré à 10 m avec un
-  // bruit de ± 6 m — et la distance à la prochaine manœuvre remonterait alors
-  // par à-coups, ce qui se lit comme une panne. On n'autorise le recul que s'il
-  // dépasse 25 m : à ce stade ce n'est plus du bruit, c'est un demi-tour.
-  const previous = state.nav.progress ?? 0;
-  state.nav.progress =
-    fix.distanceAlong > previous || previous - fix.distanceAlong > 25
-      ? fix.distanceAlong
-      : previous;
+  // Progression forcée monotone — la règle et son pourquoi sont dans
+  // `advanceProgress`, où elles s'éprouvent sans capteur.
+  state.nav.progress = advanceProgress(state.nav.progress, fix.distanceAlong);
   fix.distanceAlong = state.nav.progress;
 
   // Le cap du GPS n'existe qu'en mouvement ; à l'arrêt on garde le précédent,
@@ -1816,7 +2226,7 @@ function onPosition(position) {
     // GPS ordinaire. Au-delà de 150 m — première acquisition, retour après une
     // perte de signal — on saute plutôt que de traverser Paris en glissant.
     if (jump) map.jumpTo(camera);
-    else map.easeTo({ ...camera, duration: 400 });
+    else map.easeTo({ ...camera, duration: motionDuration(400) });
   }
 
   renderNavigation(fix, accuracy);
@@ -1842,43 +2252,209 @@ function renderNavigation(fix, accuracy) {
       voice.speak('Vous vous êtes écarté du trajet.', { interrupt: true });
       voice.vibrate([120, 80, 120, 80, 120]);
     }
-    dom.navArrow.textContent = '⟳';
-    dom.navInstruction.textContent = 'Vous vous êtes écarté du trajet';
-    dom.navSide.innerHTML = `À ${Math.round(fix.offset)} m de l'itinéraire.
-      <button id="nav-recompute" class="link">Recalculer depuis ici</button>`;
-    dom.navDistance.textContent = '';
-    document.getElementById('nav-recompute')?.addEventListener('click', () => {
-      setPlace('from', {
-        label: 'Ma position',
-        lon: state.nav.lastFix[0],
-        lat: state.nav.lastFix[1],
-      });
-      stopNavigation();
-      dom.route.hidden = false;
-      computeRoute().catch(fail);
-    });
+    setText(dom.navArrow, '⟳');
+    setText(dom.navInstruction, 'Vous vous êtes écarté du trajet');
+    // L'écart se réécrit à chaque mesure : arrondi aux cinq mètres, il cesse de
+    // faire clignoter le bouton de recalcul sous le doigt qui le vise.
+    setHTML(
+      dom.navSide,
+      `À ${Math.round(fix.offset / 5) * 5} m de l'itinéraire.
+      <button id="nav-recompute" class="link">Recalculer depuis ici</button>`,
+    );
+    setText(dom.navDistance, '');
     return;
   }
 
-  dom.navArrow.textContent = arrow;
-  dom.navInstruction.textContent = text;
-  dom.navSide.textContent = side ? `Trottoir ${side}` : '';
+  setText(dom.navArrow, arrow);
+  setText(dom.navInstruction, text);
+  setText(dom.navSide, side ? `Trottoir ${side}` : '');
 
   voice.announce(instruction, remaining, phraseFor(instruction, remaining, { text, side }));
-  dom.navDistance.textContent = remaining < 15 ? 'maintenant' : `${formatMeters(remaining)}`;
+  setText(dom.navDistance, remaining < 15 ? 'maintenant' : formatMeters(remaining));
+  warnTransition(fix.distanceAlong);
 
   const left = Math.max(0, state.route.meters - fix.distanceAlong);
   const minutes = Math.round(left / (state.meta.walkingSpeed ?? 1.35) / 60);
-  dom.navRemaining.textContent =
+  setText(
+    dom.navRemaining,
     `${formatMeters(left)} · ${minutes} min` +
-    (accuracy > 25 ? ` · position à ± ${Math.round(accuracy)} m` : '');
+      (accuracy > 25 ? ` · position à ± ${Math.round(accuracy)} m` : ''),
+  );
 
   // Exposition à l'endroit précis où l'on se trouve, et non moyenne du trajet.
   const step = state.route.steps[Math.min(fix.index, state.route.steps.length - 1)];
   if (step) {
     const now = evaluateSegment(step.segment, state.minutes);
-    dom.navExposure.innerHTML =
-      `<span style="color:${colorFor(now.index)}">●</span> indice ${now.index} — ${levelLabel(now.index)}`;
+    setHTML(
+      dom.navExposure,
+      `<span style="color:${colorFor(now.index)}">●</span> indice ${now.index} — ${levelLabel(now.index)}`,
+    );
+  }
+}
+
+/**
+ * Prévient d'un passage brutal à l'ombre → plein soleil, une trentaine de
+ * mètres avant.
+ *
+ * Trente mètres, c'est une vingtaine de secondes de marche : de quoi sortir des
+ * lunettes ou baisser les yeux, ce qui est tout ce qu'on peut faire. Prévenir
+ * plus tôt reviendrait à annoncer quelque chose qu'on ne voit pas encore ;
+ * prévenir au moment même ne servirait à rien.
+ *
+ * L'avertissement vibre aussi : c'est le seul canal qui passe quand on marche
+ * avec le téléphone en poche et le son coupé.
+ */
+function warnTransition(distanceAlong) {
+  const nav = state.nav;
+  if (!nav?.transitions) return;
+
+  for (const jump of nav.transitions) {
+    const remaining = jump.distance - distanceAlong;
+    if (remaining < 0 || remaining > 30) continue;
+    if (nav.warnedTransitions.has(jump.distance)) continue;
+    nav.warnedTransitions.add(jump.distance);
+    voice.speak(`Attention, passage au soleil dans ${Math.round(remaining / 5) * 5} mètres.`);
+    voice.vibrate([200, 100, 200]);
+    return;
+  }
+}
+
+// ------------------------------------------------------------------ hors ligne
+
+/**
+ * Ce qu'il faudrait télécharger pour tenir hors ligne sur le secteur affiché.
+ *
+ * Les zooms retenus vont de celui de l'écran au plus fin de la pyramide : on
+ * prépare ce qu'on regarde et ce qu'on regardera de plus près, pas la vue
+ * d'ensemble qu'on vient de quitter. Zoomer avant de préparer réduit donc à la
+ * fois l'emprise et le volume, ce qui est le réglage naturel.
+ */
+function offlinePlan() {
+  const view = map.getBounds();
+  const bounds = {
+    west: view.getWest(),
+    south: view.getSouth(),
+    east: view.getEast(),
+    north: view.getNorth(),
+  };
+  const { minZoom, maxZoom } = state.meta.tiles ?? { minZoom: 11, maxZoom: 16 };
+  const from = Math.max(minZoom, Math.min(maxZoom, Math.floor(map.getZoom())));
+  const tiles = tilesInBounds(bounds, { minZoom: from, maxZoom });
+
+  const absolute = (url) => new URL(url, location.href).toString();
+  const data = state.region
+    ? state.region.cellsIn(bounds).map((cell) => ({
+        url: absolute(
+          `data/${state.meta.region}/cellules/${cell.key}.data.bin${cell.stamp ? `?v=${cell.stamp}` : ''}`,
+        ),
+        bytes: cellBytes(cell),
+      }))
+    : [
+        { url: absolute(`data/${state.zoneKey}.meta.json${state.version}`), bytes: 4000 },
+        {
+          url: absolute(`data/${state.zoneKey}.data.bin${state.version}`),
+          bytes: (state.data?.segmentCount ?? 0) * 192,
+        },
+      ];
+
+  return { ...buildPlan({ tileUrl: tileTemplate(), tiles, data }), cells: data.length, from };
+}
+
+function setOfflinePanel(open) {
+  if (!open && dom.offline.contains(document.activeElement)) dom.offlineToggle.focus();
+  // Les deux panneaux occupent la même place à l'écran ; ouvrir l'un ferme donc
+  // l'autre, plutôt que de les empiler.
+  if (open && !dom.route.hidden) setRoutePanel(false);
+  dom.offline.hidden = !open;
+  dom.offlineToggle.classList.toggle('is-on', open);
+  dom.offlineToggle.setAttribute('aria-expanded', String(open));
+  if (!open) return;
+
+  dom.offlineResult.innerHTML = '';
+  const plan = offlinePlan();
+  const tooMuch = plan.tiles > MAX_PREFETCH_TILES;
+  dom.offlineGo.disabled = tooMuch;
+  dom.offlineEstimate.innerHTML = tooMuch
+    ? `<p class="warn">Le secteur affiché demande ${plan.tiles.toLocaleString('fr-FR')} tuiles —
+       bien plus qu'un quartier. Zoomez sur ce que vous allez vraiment parcourir.</p>`
+    : `<p class="offline-size"><strong>${formatBytes(plan.bytes)}</strong>
+       <span class="muted">· ${
+         state.region
+           ? `${plan.cells} secteur${plan.cells > 1 ? 's' : ''} de relevés`
+           : 'relevés de la zone'
+       } et ${plan.tiles.toLocaleString('fr-FR')} tuiles, du zoom ${plan.from} au plus fin</span></p>`;
+}
+
+async function runOffline() {
+  const plan = offlinePlan();
+  dom.offlineGo.disabled = true;
+  dom.offlineResult.innerHTML = `<p class="muted">Téléchargement… 0 %</p>`;
+
+  try {
+    const { failed } = await prefetch(plan.urls, (done, total) => {
+      dom.offlineResult.innerHTML = `<p class="muted">Téléchargement…
+        ${Math.floor((done / total) * 100)} %</p>`;
+    });
+    dom.offlineResult.innerHTML =
+      failed > 0
+        ? `<p class="warn">Secteur préparé, mais ${failed} fichier(s) manquent —
+           relancez pour les rattraper.</p>`
+        : `<p class="offline-done">Secteur disponible hors ligne.</p>`;
+  } catch (error) {
+    dom.offlineResult.innerHTML = `<p class="warn">${escapeHtml(error.message)}</p>`;
+  } finally {
+    dom.offlineGo.disabled = false;
+  }
+}
+
+// ----------------------------------------------------------- lien partageable
+
+/**
+ * Inscrit l'itinéraire courant dans l'URL.
+ *
+ * `replaceState` et non `pushState` : chaque déplacement du curseur de priorité
+ * relance le calcul, et empiler une entrée d'historique par cran ferait qu'il
+ * faudrait appuyer trente fois sur « retour » pour sortir de la page.
+ */
+function rememberRouteInUrl() {
+  history.replaceState(
+    null,
+    '',
+    writeRoute(location.href, {
+      from: state.places.from,
+      to: state.places.to,
+      alpha: Number(dom.alpha.value),
+      navigating: Boolean(state.nav),
+    }),
+  );
+}
+
+/**
+ * Rouvre l'itinéraire décrit par l'URL, s'il y en a un.
+ *
+ * Le guidage ne redémarre pas tout seul, et ce n'est pas une prudence de
+ * principe : la synthèse vocale exige un geste de l'utilisateur pour se
+ * débloquer, sur iOS comme sur Chrome mobile. Un guidage repris sans clic
+ * serait donc un guidage muet — la pire des reprises pour quelqu'un qui marche
+ * sans regarder l'écran. On calcule l'itinéraire, on ouvre le panneau, et le
+ * bouton « Démarrer le guidage » attend le doigt qui rendra la parole.
+ */
+async function restoreRouteFromUrl() {
+  const wanted = readRoute(location.href);
+  if (!wanted.from || !wanted.to) return;
+
+  if (wanted.alpha !== null) dom.alpha.value = String(wanted.alpha);
+  setPlace('from', wanted.from);
+  setPlace('to', wanted.to);
+  setRoutePanel(true);
+  await computeRoute();
+
+  if (wanted.navigating && state.route) {
+    dom.routeResult.insertAdjacentHTML(
+      'afterbegin',
+      `<p class="muted">Guidage interrompu par un rechargement — l’itinéraire est
+       refait, il ne manque qu’un appui pour reprendre la parole.</p>`,
+    );
   }
 }
 
@@ -1913,6 +2489,46 @@ function renderMarkers() {
     }
   }
   map.getSource('markers').setData({ type: 'FeatureCollection', features });
+}
+
+/**
+ * Interroge la Base Adresse Nationale, une fois la frappe reposée.
+ *
+ * Trois précautions, et chacune répond à un défaut précis :
+ *
+ *  - **Anti-rebond de 250 ms.** Sans lui, « rue de rivoli » part quatorze fois,
+ *    une par lettre, pour une seule réponse utile.
+ *  - **Abandon de la requête précédente.** Les réponses ne reviennent pas dans
+ *    l'ordre où on les demande : une requête lente sur « rue » écraserait la
+ *    liste de « rue de Rivoli », tapé depuis.
+ *  - **Vérification que le champ n'a pas changé** avant d'afficher. L'abandon
+ *    couvre le réseau, pas le cas où la réponse arrive juste après une frappe.
+ *
+ * Un échec ne dit rien à l'écran : les rues du réseau sont déjà affichées, et
+ * l'application reste utilisable hors ligne — c'est même tout l'intérêt de les
+ * chercher d'abord localement.
+ */
+const addressSearch = { timer: null, controller: null };
+
+function askAddresses(target, query, local) {
+  clearTimeout(addressSearch.timer);
+  addressSearch.controller?.abort();
+  if (query.trim().length < 3) return;
+
+  addressSearch.timer = setTimeout(async () => {
+    addressSearch.controller = new AbortController();
+    try {
+      const remote = await searchAddresses(query, {
+        center: state.meta.center,
+        bbox: state.meta.bbox,
+        signal: addressSearch.controller.signal,
+      });
+      if (dom[target].value !== query) return;
+      showSuggestions(target, mergeSuggestions(local, remote));
+    } catch (error) {
+      if (error.name !== 'AbortError') console.warn('Adresses indisponibles :', error.message);
+    }
+  }, 250);
 }
 
 function showSuggestions(target, items) {
@@ -2042,7 +2658,11 @@ function useMyPosition(target) {
           ? `<p class="muted">Position connue à ± ${Math.round(accuracy)} m seulement —
              vérifiez le point sur la carte.</p>`
           : '';
-      map.easeTo({ center: [longitude, latitude], zoom: Math.max(map.getZoom(), 16), duration: 600 });
+      map.easeTo({
+        center: [longitude, latitude],
+        zoom: Math.max(map.getZoom(), 16),
+        duration: motionDuration(600),
+      });
     },
     (error) => {
       button.classList.remove('is-busy');
@@ -2101,7 +2721,8 @@ function renderPanel(props) {
     dom.panelTitle.textContent = 'Relevés en cours de chargement';
     dom.panelSub.textContent = 'ce secteur arrive';
     dom.panelScore.innerHTML = '<span class="value muted">—</span>';
-    dom.panelAdvice.innerHTML = '<span class="muted">Le détail s’affichera dès que les relevés du secteur seront là.</span>';
+    dom.panelAdvice.innerHTML =
+      '<span class="muted">Le détail s’affichera dès que les relevés du secteur seront là.</span>';
     dom.panelChart.innerHTML = '';
     // Le clic est aussi une demande : on va chercher la cellule, et le panneau
     // se remplira à la prochaine peinture.
@@ -2146,15 +2767,13 @@ function renderPanel(props) {
   // Les luminances se lisent par ordre de grandeur, pas à l'unité : sous mille,
   // la centaine suffit ; au-delà, le millier.
   const cdm2 = (value) =>
-    value >= 1000
-      ? `${(value / 1000).toFixed(1)} kcd/m²`
-      : `${Math.round(value / 10) * 10} cd/m²`;
+    value >= 1000 ? `${(value / 1000).toFixed(1)} kcd/m²` : `${Math.round(value / 10) * 10} cd/m²`;
   const rows = twoSided
     ? [
         ['', `côté ${l.side}`, `côté ${r.side}`],
         ['Indice', l.index, r.index],
         ['Soleil direct', pct(l.sun), pct(r.sun)],
-        ['Éblouissement', pct(l.glare), pct(r.glare)],
+        ['Éblouissement de face', pct(l.glare), pct(r.glare)],
         ['Scintillement', pct(l.flicker), pct(r.flicker)],
         ['Réverbération', pct(l.reverb), pct(r.reverb)],
         ['Murs éclairés', pct(l.sunlitWalls), pct(r.sunlitWalls)],
@@ -2172,7 +2791,7 @@ function renderPanel(props) {
       ]
     : [
         ['Soleil direct', pct(l.sun)],
-        ['Éblouissement', pct(l.glare)],
+        ['Éblouissement de face', pct(l.glare)],
         ['Scintillement', pct(l.flicker)],
         ['Réverbération', pct(l.reverb)],
         ['Murs éclairés', pct(l.sunlitWalls)],
@@ -2316,9 +2935,12 @@ function bindControls() {
   dom.zone.addEventListener('change', () => {
     stopPlaying();
     prefs.write({ zone: dom.zone.value });
-    const url = new URL(location.href);
+    const url = new URL(writeRoute(location.href, {}));
     url.searchParams.set('zone', dom.zone.value);
     url.hash = '';
+    // L'itinéraire est effacé du lien en même temps qu'il l'est de l'écran :
+    // départ et arrivée appartenaient à l'autre zone, et un rechargement les
+    // aurait ressuscités hors de leur emprise.
     history.replaceState(null, '', url);
     loadZone(dom.zone.value).catch(fail);
   });
@@ -2333,6 +2955,10 @@ function bindControls() {
 
   dom.routeToggle.addEventListener('click', () => setRoutePanel(dom.route.hidden));
   dom.routeClose.addEventListener('click', () => setRoutePanel(false));
+
+  dom.offlineToggle.addEventListener('click', () => setOfflinePanel(dom.offline.hidden));
+  dom.offlineClose.addEventListener('click', () => setOfflinePanel(false));
+  dom.offlineGo.addEventListener('click', () => runOffline());
 
   dom.play.addEventListener('click', () => (state.playing ? stopPlaying() : startPlaying()));
 
@@ -2385,6 +3011,22 @@ function bindControls() {
     dom.navVoice.setAttribute('aria-pressed', String(on));
     dom.navVoice.textContent = on ? '🔊' : '🔇';
   });
+  // Le bouton « Recalculer depuis ici » naît et meurt avec le message d'écart.
+  // On écoute donc son parent, une fois pour toutes : accroché au bouton à
+  // chaque rendu, l'écouteur se serait empilé dès lors qu'on cesse de réécrire
+  // un fragment inchangé — et un clic aurait lancé dix calculs.
+  dom.navSide.addEventListener('click', (event) => {
+    if (!event.target.closest('#nav-recompute') || !state.nav?.lastFix) return;
+    setPlace('from', {
+      label: 'Ma position',
+      lon: state.nav.lastFix[0],
+      lat: state.nav.lastFix[1],
+    });
+    stopNavigation();
+    setRoutePanel(true);
+    computeRoute().catch(fail);
+  });
+
   dom.navFollow.addEventListener('click', () => {
     if (!state.nav) return;
     state.nav.following = !state.nav.following;
@@ -2406,9 +3048,12 @@ function bindControls() {
   for (const target of ['from', 'to']) {
     const input = dom[target];
 
+    // Les rues du réseau s'affichent à la frappe, sans attendre ; les adresses
+    // arrivent après, et complètent la liste sans la remplacer.
     input.addEventListener('input', () => {
-      const items = searchLocal(currentStreets(), input.value);
-      showSuggestions(target, items);
+      const local = searchLocal(currentStreets(), input.value);
+      showSuggestions(target, local);
+      askAddresses(target, input.value, local);
     });
 
     input.addEventListener('keydown', async (event) => {
@@ -2441,14 +3086,33 @@ function bindControls() {
         return;
       }
 
+      // À défaut d'une option visée, la première de la liste affichée : c'est
+      // ce qu'on lit, et valider doit donner ce qu'on lit. La liste peut déjà
+      // contenir des adresses, arrivées après la frappe.
+      const shown = JSON.parse(list.dataset.items ?? '[]');
+      if (!list.hidden && shown.length > 0) {
+        setPlace(target, shown[0]);
+        return;
+      }
+
       const local = searchLocal(currentStreets(), input.value);
       if (local.length > 0) {
         setPlace(target, local[0]);
         return;
       }
-      // Rien dans nos rues : on interroge Nominatim, mais seulement ici — sur
-      // une validation explicite, jamais à chaque frappe.
+
+      // Ni rue du réseau, ni adresse : ce qu'on cherche est un lieu — une gare,
+      // un musée, un square. Nominatim les connaît, et on ne le dérange qu'ici,
+      // sur une validation explicite, jamais à chaque frappe.
       try {
+        const addresses = await searchAddresses(input.value, {
+          center: state.meta.center,
+          bbox: state.meta.bbox,
+        });
+        if (addresses.length > 0) {
+          setPlace(target, addresses[0]);
+          return;
+        }
         const remote = await searchRemote(input.value, state.meta.bbox);
         if (remote.length > 0) setPlace(target, remote[0]);
         else showSuggestions(target, []);
@@ -2506,6 +3170,7 @@ function bindControls() {
 function closeTopmost() {
   if (state.picking) stopPicking();
   else if (dom.topbar.classList.contains('is-open')) setSettingsOpen(false);
+  else if (!dom.offline.hidden) setOfflinePanel(false);
   else if (!dom.route.hidden) setRoutePanel(false);
   else if (!dom.panel.hidden) closeDetailPanel();
 }
@@ -2519,6 +3184,7 @@ function closeTopmost() {
  */
 function setRoutePanel(open) {
   if (!open && dom.route.contains(document.activeElement)) dom.routeToggle.focus();
+  if (open && !dom.offline.hidden) setOfflinePanel(false);
 
   dom.route.hidden = !open;
   dom.routeToggle.classList.toggle('is-on', open);
@@ -2616,6 +3282,27 @@ function formatClock(minutes) {
 
 function emptyCollection() {
   return { type: 'FeatureCollection', features: [] };
+}
+
+/**
+ * Écrit un texte, et rien du tout s'il n'a pas changé.
+ *
+ * Ce n'est pas une économie de rendu : une zone vivante annonce sur **mutation
+ * du DOM**, pas sur changement de valeur. Réécrire la même consigne à chaque
+ * point GPS la faisait donc relire à chaque seconde, alors que rien ne s'était
+ * passé — le bandeau de guidage devenait inutilisable au lecteur d'écran.
+ * Scoper `aria-live` était nécessaire, mais pas suffisant.
+ */
+function setText(element, text) {
+  const value = String(text ?? '');
+  if (element.textContent === value) return;
+  element.textContent = value;
+}
+
+/** Même chose pour un fragment balisé — voir `setText`. */
+function setHTML(element, html) {
+  if (element.innerHTML === html) return;
+  element.innerHTML = html;
 }
 
 function escapeHtml(text) {

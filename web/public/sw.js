@@ -24,11 +24,19 @@ const TILES = `${VERSION}-tiles`;
 /** Au-delà, on oublie les plus anciennes tuiles de fond de carte. */
 const MAX_TILES = 1200;
 
-const ALWAYS_LIVE = ['api.open-meteo.com', 'nominatim.openstreetmap.org', 'data.geopf.fr'];
+const ALWAYS_LIVE = [
+  'api.open-meteo.com',
+  'nominatim.openstreetmap.org',
+  'api-adresse.data.gouv.fr',
+  'data.geopf.fr',
+];
 
 self.addEventListener('install', (event) => {
   event.waitUntil(
-    caches.open(SHELL).then((cache) => cache.addAll(['./', './index.html'])).then(() => self.skipWaiting()),
+    caches
+      .open(SHELL)
+      .then((cache) => cache.addAll(['./', './index.html']))
+      .then(() => self.skipWaiting()),
   );
 });
 
@@ -37,7 +45,9 @@ self.addEventListener('activate', (event) => {
     caches
       .keys()
       .then((keys) =>
-        Promise.all(keys.filter((key) => !key.startsWith(VERSION)).map((key) => caches.delete(key))),
+        Promise.all(
+          keys.filter((key) => !key.startsWith(VERSION)).map((key) => caches.delete(key)),
+        ),
       )
       .then(() => self.clients.claim()),
   );
@@ -71,6 +81,64 @@ self.addEventListener('fetch', (event) => {
     event.respondWith(staleWhileRevalidate(request, SHELL));
   }
 });
+
+/**
+ * Pré-chargement d'un secteur, demandé par la page.
+ *
+ * C'est le service worker qui télécharge, et non la page : lui seul connaît le
+ * nom de ses caches — que la page devrait dupliquer, donc désynchroniser à la
+ * première montée de version — et il survit au passage de l'onglet en
+ * arrière-plan, ce qui arrive à tous les coups quand on lance un
+ * téléchargement de soixante mégaoctets et qu'on repose son téléphone.
+ *
+ * Six requêtes de front : au-delà, on sature le lien sans rien gagner, et sur
+ * un réseau mobile on fait surtout monter le taux d'échec. En dessous, un
+ * secteur de quatre cellules prend une éternité.
+ */
+self.addEventListener('message', (event) => {
+  const message = event.data;
+  if (message?.type !== 'svet-prefetch') return;
+  const port = event.ports[0];
+  if (!port) return;
+  event.waitUntil(prefetch(message.urls ?? [], port));
+});
+
+async function prefetch(urls, port) {
+  const cache = await caches.open(DATA);
+  let done = 0;
+  let failed = 0;
+
+  const worker = async (queue) => {
+    for (const url of queue) {
+      try {
+        // On ne redemande pas ce qui est déjà là : préparer deux fois le même
+        // secteur doit être instantané, pas coûter un second téléchargement.
+        const hit = await cache.match(url);
+        if (!hit) {
+          const response = await fetch(url);
+          // Un 404 est une réponse normale ici : la pyramide a de vrais trous,
+          // et une tuile absente n'est pas un échec de préparation.
+          if (response.ok) await cache.put(url, response.clone());
+          else if (response.status !== 404) failed++;
+        }
+      } catch {
+        failed++;
+      }
+      done++;
+      if (done % 10 === 0 || done === urls.length) {
+        port.postMessage({ type: 'progress', done, total: urls.length });
+      }
+    }
+  };
+
+  const lanes = Array.from({ length: 6 }, (_, lane) => urls.filter((_, i) => i % 6 === lane));
+  try {
+    await Promise.all(lanes.map(worker));
+    port.postMessage({ type: 'done', done, failed });
+  } catch (error) {
+    port.postMessage({ type: 'error', error: error.message });
+  }
+}
 
 async function cacheFirst(request, cacheName, limit = 0) {
   const cache = await caches.open(cacheName);

@@ -62,7 +62,15 @@ export function prepareGraph(data) {
     penaltyShare[i] = segment.len > 0 ? edgeLength[i] / segment.len : 0;
   }
 
-  const prepared = { ...graph, adjStart, adjEdges, crossing, penaltyShare, edgeSegment, edgeLength };
+  const prepared = {
+    ...graph,
+    adjStart,
+    adjEdges,
+    crossing,
+    penaltyShare,
+    edgeSegment,
+    edgeLength,
+  };
   labelComponents(prepared);
   return prepared;
 }
@@ -149,7 +157,56 @@ export function nearestNode(graph, lon, lat, { minComponentSize = 200 } = {}) {
 }
 
 /**
+ * Rend la main au navigateur.
+ *
+ * `setTimeout(0)` ne convient pas : au-delà de cinq imbrications, la norme
+ * impose un plancher de 4 ms, ce qui multiplierait par cinq la durée d'une
+ * recherche découpée en tranches de 8 ms. Un canal de messages n'a pas cette
+ * clause ; `scheduler.yield`, là où il existe, fait mieux encore en reprenant
+ * la main avant les tâches de moindre priorité.
+ */
+function yieldToBrowser() {
+  if (typeof scheduler === 'object' && typeof scheduler?.yield === 'function') {
+    return scheduler.yield();
+  }
+  return new Promise((resolve) => {
+    const channel = new MessageChannel();
+    channel.port1.onmessage = () => {
+      channel.port1.close();
+      resolve();
+    };
+    channel.port2.postMessage(null);
+  });
+}
+
+/** Levée quand un appelant renonce à la recherche en cours. */
+export class SearchAborted extends Error {
+  constructor() {
+    super('Recherche interrompue.');
+    this.name = 'SearchAborted';
+  }
+}
+
+/**
+ * Durée maximale d'une tranche de calcul, en millisecondes.
+ *
+ * Une image dure 16,7 ms. En laisser la moitié au calcul et l'autre au rendu
+ * garde la carte manipulable pendant la recherche : on peut continuer à faire
+ * glisser le plan, et le curseur de priorité répond.
+ */
+const SLICE_MS = 8;
+
+/**
  * Itinéraire au moindre coût, par A*.
+ *
+ * **Asynchrone à dessein.** Le calcul reste sur le fil principal — le déporter
+ * dans un travailleur demanderait d'y faire voyager les vues binaires, qui font
+ * cinquante mégaoctets par zone et que l'affichage lit en même temps, sans
+ * `SharedArrayBuffer` (donc sans en-têtes d'isolation à déployer). Mais il rend
+ * la main toutes les huit millisecondes. La carte reste donc vivante pendant
+ * une recherche, ce qui compte d'autant plus qu'un couloir régional de quatorze
+ * cellules porte le graphe à plusieurs millions d'arêtes — et que « quand
+ * partir ? » enchaîne une douzaine de recherches d'affilée.
  *
  * @param {object} graph
  * @param {number} start nœud de départ
@@ -161,11 +218,18 @@ export function nearestNode(graph, lon, lat, { minComponentSize = 200 } = {}) {
  * @param {number} options.departureMinutes heure de départ, en minutes locales
  * @param {(position: number, minutes: number) => {index: number, side: string, sun: number}}
  *        options.evaluate état d'un tronçon à un instant donné
- * @returns {null | {edges: object[], seconds: number, meters: number, index: number}}
+ * @param {AbortSignal} [options.signal] pour renoncer à une recherche dépassée
+ * @param {boolean} [options.blocking] calcule d'un trait, sans rendre la main
+ * @returns {Promise<null | {edges: object[], seconds: number, meters: number, index: number}>}
  */
-export function findRoute(graph, start, goal, options) {
-  const { alpha, speed, crossingPenalty, departureMinutes, evaluate } = options;
+export async function findRoute(graph, start, goal, options) {
+  const { alpha, speed, crossingPenalty, departureMinutes, evaluate, signal, blocking } = options;
   const size = graph.size;
+  let sliceEnd = now() + SLICE_MS;
+  // Une recherche déjà dépassée avant d'avoir commencé ne doit pas commencer :
+  // sur un petit graphe, tout se termine dans la première tranche et le signal
+  // ne serait jamais consulté.
+  if (signal?.aborted) throw new SearchAborted();
 
   const cost = new Float64Array(size).fill(Infinity);
   const clock = new Float64Array(size);
@@ -186,6 +250,15 @@ export function findRoute(graph, start, goal, options) {
   open.push(start, heuristic(start));
 
   while (open.size > 0) {
+    // Le contrôle est en tête de boucle et non dans la boucle interne : une
+    // seule lecture d'horloge par nœud dépilé, pour un budget qu'on ne dépasse
+    // au pire que d'un voisinage — quelques microsecondes.
+    if (!blocking && now() >= sliceEnd) {
+      await yieldToBrowser();
+      if (signal?.aborted) throw new SearchAborted();
+      sliceEnd = now() + SLICE_MS;
+    }
+
     const current = open.pop();
     if (current === goal) break;
     if (closed[current]) continue;
@@ -321,6 +394,92 @@ export function summarize(route) {
   return legs.filter((leg) => leg.meters >= 12 || leg.crossing);
 }
 
+/**
+ * Passages brutaux de l'ombre au plein soleil, sur un trajet déjà calculé.
+ *
+ * Le modèle ignore l'adaptation de l'œil, et c'est délibéré : la diviser par la
+ * luminance d'adaptation suppose une adaptation normale, ce qui est justement la
+ * fonction altérée chez les personnes photophobes. Reste que la **mémoire**
+ * manque vraiment — sortir d'une rue à l'ombre en plein soleil ne se vit pas
+ * comme y arriver progressivement, et un itinéraire *est* une succession.
+ *
+ * L'introduire dans le calcul est une autre affaire : le coût d'une arête
+ * dépendrait du chemin parcouru pour l'atteindre, ce qui retire à Dijkstra la
+ * propriété qui le rend correct. Le faire **après coup** ne coûte rien et dit
+ * l'essentiel — pas « ce trajet vaut 46 » mais « au bout de trois cents mètres,
+ * vous allez passer de 20 à 70 d'un coup ».
+ *
+ * La moyenne se fait sur une fenêtre de part et d'autre, et non d'un tronçon au
+ * suivant : le découpage OSM produit des bouts de dix mètres, et deux tronçons
+ * consécutifs de la même rue peuvent différer de trente points sans que rien ne
+ * se voie sur le terrain. Ce qu'on cherche, c'est le front d'ombre traversé,
+ * long de quelques dizaines de mètres.
+ *
+ * @param {object} route sortie de `findRoute`
+ * @param {object} [options]
+ * @param {number} [options.jump] écart d'indice à partir duquel on le signale
+ * @param {number} [options.span] demi-fenêtre de moyenne, en mètres
+ * @returns {{distance: number, before: number, after: number, name: string|null}[]}
+ */
+export function transitions(route, { jump = 25, span = 40 } = {}) {
+  const steps = route?.steps ?? [];
+  if (steps.length < 2) return [];
+
+  // Distance cumulée à la fin de chaque tronçon.
+  const ends = new Float64Array(steps.length);
+  let total = 0;
+  for (let i = 0; i < steps.length; i++) {
+    total += steps[i].length;
+    ends[i] = total;
+  }
+
+  /** Indice moyen, pondéré par la longueur, sur une portion du trajet. */
+  const meanIndex = (from, to) => {
+    let weighted = 0;
+    let length = 0;
+    for (let i = 0; i < steps.length; i++) {
+      const start = ends[i] - steps[i].length;
+      const overlap = Math.min(to, ends[i]) - Math.max(from, start);
+      if (overlap <= 0) continue;
+      weighted += steps[i].state.index * overlap;
+      length += overlap;
+    }
+    return length > 0 ? { index: weighted / length, length } : null;
+  };
+
+  const found = [];
+  for (let i = 0; i < steps.length - 1; i++) {
+    const at = ends[i];
+    const before = meanIndex(at - span, at);
+    const after = meanIndex(at, at + span);
+    // Il faut de l'élan des deux côtés : sans ce garde-fou, les tout premiers
+    // mètres du trajet produisent une transition à partir de rien.
+    if (!before || !after || before.length < 15 || after.length < 15) continue;
+    if (after.index - before.index < jump) continue;
+    found.push({
+      distance: at,
+      before: Math.round(before.index),
+      after: Math.round(after.index),
+      name: steps[i + 1].name ?? null,
+      delta: after.index - before.index,
+    });
+  }
+
+  // Un même front est vu par tous les tronçons qu'il recouvre : on ne garde que
+  // le plus marqué de chaque groupe, sans quoi une seule sortie d'ombre
+  // s'annoncerait six fois.
+  const kept = [];
+  for (const candidate of found) {
+    const last = kept[kept.length - 1];
+    if (last && candidate.distance - last.distance < span) {
+      if (candidate.delta > last.delta) kept[kept.length - 1] = candidate;
+      continue;
+    }
+    kept.push(candidate);
+  }
+  return kept.map(({ delta, ...rest }) => rest);
+}
+
 /** Cap de marche, en radians depuis le nord, en allant de `from` vers `to`. */
 function headingOf(graph, from, to) {
   const midLat = ((graph.nodeLat[from] + graph.nodeLat[to]) / 2) * (Math.PI / 180);
@@ -328,6 +487,12 @@ function headingOf(graph, from, to) {
   const north = graph.nodeLat[to] - graph.nodeLat[from];
   return Math.atan2(east, north);
 }
+
+/** Horloge monotone, disponible aussi bien dans un navigateur que sous Node. */
+const now =
+  typeof performance === 'object' && typeof performance?.now === 'function'
+    ? () => performance.now()
+    : () => Date.now();
 
 /**
  * Distance approchée en mètres, dans le plan tangent local.

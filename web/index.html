@@ -34,8 +34,14 @@
         </div>
         <!-- Replie les réglages sur petit écran. Sur grand écran ils tiennent
              dans la barre et ce bouton n'a pas lieu d'être : il est masqué. -->
-        <button id="settings-toggle" class="toggle" type="button"
-                aria-expanded="false" aria-controls="controls" title="Réglages d’affichage">
+        <button
+          id="settings-toggle"
+          class="toggle"
+          type="button"
+          aria-expanded="false"
+          aria-controls="controls"
+          title="Réglages d’affichage"
+        >
           Réglages
         </button>
       </div>
@@ -78,17 +84,45 @@
             <option value="clear">Ciel clair</option>
           </select>
         </label>
-        <button id="pitch-toggle" class="toggle" type="button" aria-pressed="false" title="Vue en relief">
+        <button
+          id="pitch-toggle"
+          class="toggle"
+          type="button"
+          aria-pressed="false"
+          title="Vue en relief"
+        >
           3D
         </button>
-        <button id="tiles-toggle" class="toggle is-on" type="button" aria-pressed="true"
-                title="Tuiles vectorielles : ne charge que ce qui est affiché">
+        <button
+          id="tiles-toggle"
+          class="toggle is-on"
+          type="button"
+          aria-pressed="true"
+          title="Tuiles vectorielles : ne charge que ce qui est affiché"
+        >
           Tuiles
+        </button>
+        <button
+          id="offline-toggle"
+          class="toggle"
+          type="button"
+          aria-expanded="false"
+          aria-controls="offline"
+          title="Télécharger le secteur affiché pour l’utiliser sans réseau"
+        >
+          Hors ligne
         </button>
         <label class="field dimmer-field">
           <span>Pénombre</span>
-          <input id="dim" type="range" min="0" max="80" step="5" value="0"
-                 aria-label="Assombrir l’interface" />
+          <input
+            id="dim"
+            type="range"
+            min="0"
+            max="80"
+            step="5"
+            value="0"
+            aria-label="Assombrir l’interface"
+          />
         </label>
       </div>
 
@@ -113,31 +147,83 @@
       <div class="place-field">
         <label for="from">Départ</label>
         <div class="place-input">
-          <input id="from" type="text" placeholder="Gare Saint-Lazare…" autocomplete="off"
-                 role="combobox" aria-autocomplete="list" aria-expanded="false"
-                 aria-controls="from-suggestions" />
-          <button class="locate" data-target="from" type="button"
-                  title="Partir de ma position" aria-label="Partir de ma position">⌖</button>
-          <button class="pick" data-target="from" type="button"
-                  title="Choisir sur la carte" aria-label="Choisir le départ sur la carte">◎</button>
+          <input
+            id="from"
+            type="text"
+            placeholder="Gare Saint-Lazare…"
+            autocomplete="off"
+            role="combobox"
+            aria-autocomplete="list"
+            aria-expanded="false"
+            aria-controls="from-suggestions"
+          />
+          <button
+            class="locate"
+            data-target="from"
+            type="button"
+            title="Partir de ma position"
+            aria-label="Partir de ma position"
+          >
+            ⌖
+          </button>
+          <button
+            class="pick"
+            data-target="from"
+            type="button"
+            title="Choisir sur la carte"
+            aria-label="Choisir le départ sur la carte"
+          >
+            ◎
+          </button>
         </div>
-        <ul class="suggestions" id="from-suggestions" role="listbox"
-            aria-label="Suggestions de départ" hidden></ul>
+        <ul
+          class="suggestions"
+          id="from-suggestions"
+          role="listbox"
+          aria-label="Suggestions de départ"
+          hidden
+        ></ul>
       </div>
 
       <div class="place-field">
         <label for="to">Arrivée</label>
         <div class="place-input">
-          <input id="to" type="text" placeholder="Musée du Louvre…" autocomplete="off"
-                 role="combobox" aria-autocomplete="list" aria-expanded="false"
-                 aria-controls="to-suggestions" />
-          <button class="locate" data-target="to" type="button"
-                  title="Arriver à ma position" aria-label="Arriver à ma position">⌖</button>
-          <button class="pick" data-target="to" type="button"
-                  title="Choisir sur la carte" aria-label="Choisir l’arrivée sur la carte">◎</button>
+          <input
+            id="to"
+            type="text"
+            placeholder="Musée du Louvre…"
+            autocomplete="off"
+            role="combobox"
+            aria-autocomplete="list"
+            aria-expanded="false"
+            aria-controls="to-suggestions"
+          />
+          <button
+            class="locate"
+            data-target="to"
+            type="button"
+            title="Arriver à ma position"
+            aria-label="Arriver à ma position"
+          >
+            ⌖
+          </button>
+          <button
+            class="pick"
+            data-target="to"
+            type="button"
+            title="Choisir sur la carte"
+            aria-label="Choisir l’arrivée sur la carte"
+          >
+            ◎
+          </button>
         </div>
-        <ul class="suggestions" id="to-suggestions" role="listbox"
-            aria-label="Suggestions d’arrivée" hidden></ul>
+        <ul
+          class="suggestions"
+          id="to-suggestions"
+          role="listbox"
+          aria-label="Suggestions d’arrivée"
+          hidden
+        ></ul>
       </div>
 
       <div class="tradeoff">
@@ -154,6 +240,22 @@
       <div id="route-result"></div>
     </aside>
 
+    <!-- --------------------------------------------------- hors ligne ---- -->
+    <!-- Se prépare avant de sortir, pas en marchant : le bouton vit donc dans
+         les réglages, et non dans la barre d'actions. -->
+    <aside id="offline" aria-label="Préparer hors ligne" hidden>
+      <button id="offline-close" type="button" aria-label="Fermer">×</button>
+      <h2>Préparer hors ligne</h2>
+      <p class="muted">
+        Le secteur affiché à l’écran est téléchargé une fois pour toutes : relevés, tracés des rues,
+        jusqu’au zoom le plus fin. Ensuite, la carte et le calcul d’itinéraire fonctionnent sans
+        réseau.
+      </p>
+      <div id="offline-estimate"></div>
+      <button id="offline-go" class="primary" type="button">Télécharger</button>
+      <div id="offline-result"></div>
+    </aside>
+
     <!-- ------------------------------------------------------ détail rue -->
     <aside id="panel" aria-label="Détail du tronçon" hidden>
       <button id="panel-close" type="button" aria-label="Fermer">×</button>
@@ -167,22 +269,39 @@
 
     <!-- ------------------------------------------------------- guidage -->
     <!-- `tabindex="-1"` pour recevoir le focus au démarrage du guidage : le
-         panneau d'itinéraire qui le portait disparaît à cet instant. -->
-    <section id="nav" tabindex="-1" aria-label="Guidage" hidden aria-live="polite">
+         panneau d'itinéraire qui le portait disparaît à cet instant.
+
+         La zone vivante est la consigne, et elle seule. Portée par la section
+         entière, elle faisait annoncer « 340 m · 4 min · indice 46 » à chaque
+         point GPS — une fois par seconde, pendant toute la marche — ce qui
+         noyait la seule phrase qui compte. La distance restante et l'exposition
+         se lisent à l'écran ou se demandent ; elles n'ont pas à s'imposer.
+         `aria-atomic` fait relire la consigne entière plutôt que le seul mot
+         changé, sans quoi « nord » se dirait tout seul. -->
+    <section id="nav" tabindex="-1" aria-label="Guidage" hidden>
       <div class="nav-main">
-        <span class="nav-arrow" id="nav-arrow">↑</span>
-        <div class="nav-text">
+        <span class="nav-arrow" id="nav-arrow" aria-hidden="true">↑</span>
+        <div class="nav-text" aria-live="polite" aria-atomic="true">
           <strong id="nav-instruction">—</strong>
           <span class="nav-side" id="nav-side"></span>
         </div>
         <span class="nav-distance" id="nav-distance"></span>
       </div>
-      <div class="nav-foot">
+      <div class="nav-foot" aria-live="off">
         <span id="nav-remaining" class="muted"></span>
         <span id="nav-exposure" class="muted"></span>
-        <button id="nav-voice" class="toggle is-on" type="button" aria-pressed="true"
-                title="Annonces vocales">🔊</button>
-        <button id="nav-follow" class="toggle is-on" type="button" aria-pressed="true">Suivre</button>
+        <button
+          id="nav-voice"
+          class="toggle is-on"
+          type="button"
+          aria-pressed="true"
+          title="Annonces vocales"
+        >
+          🔊
+        </button>
+        <button id="nav-follow" class="toggle is-on" type="button" aria-pressed="true">
+          Suivre
+        </button>
         <button id="nav-stop" class="toggle" type="button">Arrêter</button>
       </div>
     </section>

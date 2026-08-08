@@ -100,7 +100,12 @@ body {
   height: 100%;
   background: var(--bg);
   color: var(--text);
-  font: 14px/1.5 ui-sans-serif, system-ui, -apple-system, 'Segoe UI', sans-serif;
+  font:
+    14px/1.5 ui-sans-serif,
+    system-ui,
+    -apple-system,
+    'Segoe UI',
+    sans-serif;
   overflow: hidden;
 }
 
@@ -494,7 +499,8 @@ input:focus-visible {
 
 /* -------------------------------------------------------------- itinéraire */
 
-#route {
+#route,
+#offline {
   position: absolute;
   top: calc(var(--topbar-h) + 10px);
   left: calc(14px + var(--safe-l));
@@ -510,12 +516,14 @@ input:focus-visible {
   backdrop-filter: blur(8px);
 }
 
-#route h2 {
+#route h2,
+#offline h2 {
   margin: 0 0 12px;
   font-size: 16px;
 }
 
-#route-close {
+#route-close,
+#offline-close {
   position: absolute;
   top: 8px;
   right: 10px;
@@ -763,6 +771,167 @@ button.primary:hover {
   margin: 12px 0 0;
   font-size: 12.5px;
   color: #d9a441;
+}
+
+/**
+ * Passages brutaux ombre → plein soleil.
+ *
+ * Encadré et non fondu dans la feuille de route : c'est la seule information du
+ * panneau qui ne se déduit pas de la moyenne affichée plus haut — un trajet
+ * d'indice 30 peut contenir un saut de 20 à 75, et c'est ce saut-là qui fait
+ * mal. La bordure est chaude sans être vive : un avertissement, pas une alarme.
+ */
+.jumps {
+  margin: 0 0 12px;
+  padding: 9px 11px;
+  border-left: 2px solid #d9a441;
+  background: rgb(217 164 65 / 7%);
+  border-radius: 0 6px 6px 0;
+}
+
+.jumps h3 {
+  margin: 0 0 6px;
+  font-size: 11px;
+  font-weight: 600;
+  letter-spacing: 0.04em;
+  text-transform: uppercase;
+  color: #d9a441;
+}
+
+.jumps ul {
+  margin: 0;
+  padding: 0;
+  list-style: none;
+  font-size: 12.5px;
+  line-height: 1.5;
+}
+
+.jumps li + li {
+  margin-top: 4px;
+}
+
+.jump-at {
+  display: inline-block;
+  min-width: 3.4em;
+  color: var(--text-dim);
+  font-variant-numeric: tabular-nums;
+}
+
+.jumps p {
+  margin: 6px 0 0;
+  font-size: 11.5px;
+  line-height: 1.45;
+}
+
+/* Le panneau hors ligne partage la mise en page de l'itinéraire ; il en occupe
+   la place, et les deux ne s'ouvrent jamais ensemble. */
+#offline p {
+  font-size: 12.5px;
+  line-height: 1.5;
+}
+
+.offline-size {
+  margin: 12px 0;
+  font-size: 15px;
+}
+
+.offline-size .muted {
+  display: block;
+  margin-top: 2px;
+  font-size: 11.5px;
+}
+
+.offline-done {
+  margin: 12px 0 0;
+  color: var(--accent);
+}
+
+/**
+ * « Quand partir ? »
+ *
+ * Un histogramme et non une courbe : chaque barre est un départ qu'on peut
+ * choisir, donc un bouton, et un bouton doit avoir une surface à toucher. La
+ * hauteur porte l'indice, la couleur le répète — la même échelle que les rues
+ * de la carte, pour qu'un coup d'œil suffise à faire le lien.
+ */
+.departures {
+  margin: 12px 0 0;
+}
+
+.departures h3 {
+  margin: 0 0 8px;
+  font-size: 11px;
+  font-weight: 600;
+  letter-spacing: 0.04em;
+  text-transform: uppercase;
+  color: var(--text-dim);
+}
+
+.departure-bars {
+  display: flex;
+  align-items: flex-end;
+  gap: 2px;
+  height: 84px;
+}
+
+.departure {
+  display: flex;
+  flex: 1;
+  flex-direction: column;
+  align-items: stretch;
+  justify-content: flex-end;
+  height: 100%;
+  padding: 0;
+  border: 0;
+  background: none;
+  cursor: pointer;
+}
+
+.departure-bar {
+  border-radius: 2px 2px 0 0;
+  opacity: 0.85;
+  transition: opacity 0.15s;
+}
+
+.departure:hover .departure-bar,
+.departure:focus-visible .departure-bar {
+  opacity: 1;
+}
+
+/* Le meilleur départ se repère sans lire les hauteurs. */
+.departure.is-best .departure-bar {
+  outline: 1px solid var(--text);
+  outline-offset: 1px;
+  opacity: 1;
+}
+
+.departure-time {
+  height: 14px;
+  margin-top: 3px;
+  font-size: 9.5px;
+  line-height: 14px;
+  color: var(--text-dim);
+  font-variant-numeric: tabular-nums;
+}
+
+.departures p {
+  margin: 8px 0 0;
+  font-size: 12px;
+  line-height: 1.5;
+}
+
+.route-actions {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+  margin-top: 12px;
+}
+
+/* `button.ghost` se veut pleine largeur ; côte à côte, ils se partagent la
+   ligne, et repassent l'un sous l'autre quand elle devient trop étroite. */
+.route-actions button {
+  flex: 1 1 130px;
+  margin-top: 0;
 }
 
 /* ----------------------------------------------------------------- guidage */

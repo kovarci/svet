@@ -47,6 +47,39 @@ dernier qui manquait le plus. Le format a changé quatre fois, et un décalage
 d'un octet ne plante pas : il décale toutes les séries, et l'application affiche
 des couleurs plausibles et fausses.
 
+Le même argument vaut pour le **navigateur**, qui n'avait rien : un itinéraire
+faux ne plante pas non plus, il propose un trajet un peu moins bon, et personne
+ne le remarque jamais. Un guidage faux annonce une distance qui remonte ou un
+trottoir qu'on vient de quitter — au moment précis où l'on marche sans regarder
+l'écran, c'est-à-dire où l'on a le moins de moyens de vérifier. Ce qui est
+éprouvé, et pourquoi :
+
+| | Ce qui casserait en silence |
+|---|---|
+| `routing.js` | la pondération qui ne change plus rien, l'heure de passage qui n'avance pas, un réseau exposé qui devient infranchissable |
+| `navigation.js` | le recalage qui saute sur le brin d'en face, le bruit GPS qui fait reculer la progression, le trottoir qui alterne à chaque tronçon |
+| `cells.js` | la couture des graphes régionaux, sans laquelle le réseau est coupé à chaque bord de cellule |
+| `link.js` | un lien d'itinéraire qui ne rend pas ce qu'on y a mis |
+| `offline.js` | un pavage décalé, et l'on prépare le quartier d'à côté |
+
+Aucun n'a besoin de réseau, de navigateur ni de données calculées : les graphes
+sont dessinés à la main, les cellules sont fausses, les positions sont posées.
+Le premier défaut trouvé par ces tests était réel — un lien sans priorité
+poussait le curseur sur « le plus rapide » à chaque ouverture, ce qui vidait
+l'application de son objet.
+
+Deux autres commandes, du même ordre :
+
+```bash
+npm run lint      # eslint : les fautes qu'une relecture ne voit pas
+npm run format    # prettier : la mise en forme, une fois pour toutes
+```
+
+Le linter ne juge pas le style — c'est Prettier qui s'en charge, et
+`eslint-config-prettier` éteint tout ce qui pourrait les faire se disputer
+l'indentation. Il attrape ce qu'une relecture rate : une variable jamais lue,
+une promesse jamais attendue, un `case` qui déborde sur le suivant.
+
 ### Zones
 
 ```bash
@@ -864,6 +897,79 @@ Deux points ont demandé du soin :
   d'immeuble, allées fermées. Se coller au nœud géométriquement le plus proche
   faisait échouer des adresses parfaitement ordinaires. Une gare, par exemple.
 
+#### La recherche rend la main
+
+A\* tourne sur le fil principal, mais **par tranches de huit millisecondes** :
+une image dure 16,7 ms, on en laisse la moitié au calcul et l'autre au rendu.
+La carte reste donc manipulable pendant une recherche.
+
+Ce n'est pas un raffinement depuis que la région existe. Un couloir de quatorze
+cellules porte le graphe à plusieurs millions d'arêtes, et « quand partir ? »
+(ci-dessous) enchaîne une douzaine de recherches d'affilée : bloquer le fil
+pendant tout ça, c'est une application figée pendant plusieurs secondes, sans
+rien qui distingue l'attente de la panne.
+
+**Pourquoi pas un travailleur ?** Parce qu'il faudrait y faire voyager les vues
+binaires — cinquante mégaoctets par zone, que l'affichage lit en même temps. Les
+copier double la mémoire à chaque recherche ; les partager demande un
+`SharedArrayBuffer`, donc des en-têtes d'isolation à déployer sur l'hébergeur.
+Rendre la main coûte quelques pour cent de durée totale et ne demande rien à
+personne.
+
+Rendre la main a une conséquence qu'il faut assumer : deux recherches peuvent
+désormais se croiser — le curseur de priorité en relance une à chaque cran — et
+c'est la plus lente qui écrirait la dernière dans le panneau. La précédente est
+donc abandonnée.
+
+### Quand partir ?
+
+C'est la question que se pose vraiment quelqu'un de photophobe, et l'application
+n'y répondait pas. Elle savait dire « voici le chemin le moins exposé » ; elle ne
+savait pas dire « attendez quarante-cinq minutes et le même trajet vous coûtera
+vingt points de moins » — alors que tout était là pour le calculer, puisque le
+coût d'une arête dépend déjà de l'heure où l'on y passe.
+
+Le bouton **Quand partir ?** refait la recherche pour un départ tous les quarts
+d'heure sur les trois heures à venir, dans la limite de la journée calculée, et
+en trace l'histogramme. Chaque barre est un départ qu'on peut adopter d'un clic :
+l'heure de la carte suit, les rues se recolorent, l'itinéraire se refait.
+
+**On refait la recherche, on ne rejoue pas le tracé trouvé.** C'est plus cher —
+une douzaine de A\* au lieu d'une réévaluation — mais c'est la seule réponse
+honnête : le meilleur chemin de 15 h n'est pas celui de 18 h, et se contenter de
+rejouer le premier ferait passer pour une fatalité ce qui n'est qu'un mauvais
+choix d'itinéraire.
+
+### Les passages brutaux
+
+Le modèle ignore l'adaptation de l'œil, et c'est délibéré (voir les limites,
+point 12). Reste que la **mémoire** manque vraiment : sortir d'une rue à l'ombre
+en plein soleil ne se vit pas comme y arriver progressivement, et un itinéraire
+*est* une succession.
+
+L'introduire dans le calcul retirerait à Dijkstra la propriété qui le rend
+correct — le coût d'une arête dépendrait du chemin parcouru pour l'atteindre. Le
+faire **après coup**, sur un trajet déjà calculé, ne coûte rien et dit
+l'essentiel :
+
+```
+PASSAGES BRUTAUX À L'OMBRE → PLEIN SOLEIL
+  320 m   Quai des Tuileries — l'indice passe de 18 à 74.
+  1,1 km  Pont Royal — l'indice passe de 22 à 69.
+```
+
+La moyenne se fait sur quarante mètres de part et d'autre, et non d'un tronçon
+au suivant : le découpage OSM produit des bouts de dix mètres, et deux tronçons
+consécutifs de la même rue peuvent différer de trente points sans que rien ne se
+voie sur le terrain. Ce qu'on cherche est le front d'ombre traversé. Un même
+front est vu par tous les tronçons qu'il recouvre : on ne garde que le plus
+marqué de chaque groupe, sans quoi une seule sortie d'ombre s'annoncerait six
+fois. Et il faut de l'élan des deux côtés — sans ce garde-fou, tout trajet
+commençant à l'ombre s'ouvrait sur un avertissement.
+
+Le sens inverse ne se signale pas : entrer à l'ombre n'a jamais fait de mal à
+personne.
+
 ### Résultat mesuré
 
 Gare Saint-Lazare → Musée du Louvre, 31 juillet à 14 h, ciel clair, sur la zone
@@ -927,7 +1033,38 @@ flagrant à l'usage :
   dépasse 25 m : à ce stade ce n'est plus du bruit, c'est un demi-tour.
 - **Caméra.** Une animation de 700 ms relancée à chaque position n'était jamais
   jouée qu'en partie : la caméra rampait loin derrière. Elle est ramenée à
-  400 ms, sous la seconde d'un GPS ordinaire, et saute au-delà de 150 m.
+  400 ms, sous la seconde d'un GPS ordinaire, et saute au-delà de 150 m. Et
+  quand le système annonce `prefers-reduced-motion`, elle ne glisse plus du
+  tout : elle saute. La feuille de style respectait déjà la préférence, mais
+  elle ne peut rien sur MapLibre, dont les déplacements sont pilotés en
+  JavaScript — or c'est là qu'est le mouvement le plus présent de
+  l'application, une glissade par seconde pendant toute la marche.
+
+**L'écran ne s'éteint plus.** C'était le plus gros écart entre ce que
+l'application promet et ce qu'elle fait dehors : un guidage piéton se consulte
+par coups d'œil, et au bout de trente secondes sans toucher l'écran le téléphone
+se verrouille — l'annonce suivante tombe dans le vide. Un verrou d'écran
+(`WakeLock`) est pris au démarrage du guidage et rendu à l'arrêt. Il est **perdu
+à chaque passage en arrière-plan**, sans erreur ni message : c'est le
+comportement normal de l'interface, et il faut donc le redemander au retour,
+sans quoi il ne tient que jusqu'au premier appel reçu. Un refus — batterie
+faible, économiseur d'énergie, navigateur qui ne connaît pas cette API — ne dit
+rien à l'écran : le guidage fonctionne quand même, il faut seulement rallumer.
+
+**Le bandeau ne parle plus au lecteur d'écran pour ne rien dire.** La zone
+vivante portait sur la section entière, si bien que la distance restante et
+l'exposition — réécrites à chaque point GPS, soit une fois par seconde — se
+faisaient annoncer en boucle et noyaient la consigne, qui est la seule chose
+qu'on ait besoin d'entendre. Elle porte désormais sur la consigne seule. Et
+restreindre la portée ne suffisait pas : une zone vivante annonce sur
+**mutation du DOM**, pas sur changement de valeur, si bien que réécrire la même
+phrase la faisait relire. On n'écrit donc plus un texte identique à celui qui
+est déjà là.
+
+**Un passage brutal de l'ombre au plein soleil est annoncé trente mètres
+avant** — une vingtaine de secondes, de quoi sortir des lunettes ou baisser les
+yeux, ce qui est tout ce qu'on peut faire. Voir « Les passages brutaux », plus
+haut.
 
 ### Les annonces vocales
 
@@ -975,6 +1112,32 @@ invisible** — le défaut s'est manifesté sur le premier recalcul suivant. Cha
 zone porte donc l'horodatage de son calcul dans `zones.json`, repris en
 paramètre d'URL ; et `zones.json` lui-même est toujours revalidé, sans quoi il
 figerait la chaîne entière.
+
+#### Préparer un secteur, plutôt que l'espérer
+
+Le service worker met en cache ce qu'on lui a **déjà demandé**. C'est ce qu'il
+faut pour qu'une coupure en pleine marche ne casse rien, mais ça ne permet pas
+de *préparer* une sortie : pour être sûr d'avoir un quartier hors ligne, il
+fallait l'avoir parcouru à l'écran, tuile par tuile, avant de partir. Autant dire
+que personne ne le faisait.
+
+Le bouton **Hors ligne** télécharge le secteur affiché : les relevés — le binaire
+de la zone, ou les cellules que l'écran recoupe — et les tuiles vectorielles, du
+zoom courant au plus fin. Le poids est annoncé avant, et au-delà de quatre mille
+tuiles on refuse : ce n'est plus un secteur, c'est la région.
+
+Le mode « Tout chargé » couvrait déjà le cas d'une zone. Il n'existe pas en
+région — c'est précisément ce qu'on ne peut pas faire à cette taille — et c'est
+pourtant là que le besoin est le plus fort : hors de Paris le réseau mobile est
+moins bon, et une cellule pèse seize mégaoctets.
+
+**C'est le service worker qui télécharge, pas la page.** Deux raisons : lui seul
+connaît le nom de ses caches — que la page devrait dupliquer, donc
+désynchroniser à la première montée de version — et il survit au passage de
+l'onglet en arrière-plan, ce qui arrive à tous les coups quand on lance soixante
+mégaoctets et qu'on repose son téléphone. Un 404 n'est pas compté comme un
+échec : la pyramide a de vrais trous, et une tuile absente n'est pas une
+préparation ratée.
 
 L'application est installable (manifeste PWA) et s'ouvre en plein écran. Elle ne
 l'était pas vraiment : le manifeste ne déclarait aucune icône, et il en faut une
@@ -1038,7 +1201,28 @@ La géolocalisation **et** le service worker exigent un **contexte sécurisé** 
   éblouissement, scintillement, indice UV.
 - **Clic sur une rue** : le détail des deux côtés, la courbe de la journée pour
   chacun, et la recommandation — « Marchez côté sud, 46 contre 66 côté nord ».
-- **L'URL suit la carte** : un lien vers une rue précise reste partageable.
+- **L'URL suit la carte** : un lien vers une rue précise reste partageable, et
+  **l'itinéraire y est aussi** — départ, arrivée, priorité. Un lien envoyé à
+  quelqu'un rouvre son trajet ; un onglet rechargé le retrouve. Un navigateur
+  mobile recharge les onglets qu'il a mis en veille, et il le fait exactement
+  quand on marche depuis dix minutes sans toucher l'écran : retrouver alors un
+  panneau vide, à ressaisir deux adresses, c'était perdre le guidage au pire
+  moment. Le guidage, lui, ne redémarre pas tout seul — la synthèse vocale exige
+  un geste de l'utilisateur, et un guidage repris sans clic serait un guidage
+  muet. L'itinéraire est refait, il ne manque qu'un appui.
+- **Recherche d'adresse, avec les numéros.** Les rues du réseau se proposent à
+  la frappe, instantanément et hors ligne ; la Base Adresse Nationale complète
+  la liste juste après, ce qui fait enfin exister « 12 rue de Sévigné ». Le
+  réseau ne connaît que des *noms de voie*, or c'est bien avec un numéro qu'on
+  saisit une destination. Nominatim reste en dernier recours, sur validation
+  explicite, pour ce qui n'est pas une adresse : gares, musées, jardins.
+- **L'éblouissement affiché est celui du pire cas**, soleil de face. Il dépend du
+  cap de marche — marcher face à un soleil rasant n'a rien à voir avec parcourir
+  la même rue en sens inverse — et une carte ne sait pas dans quel sens on
+  prendra la rue. Le calcul d'itinéraire, lui, évalue chaque tronçon dans le sens
+  réellement parcouru. La même rue portait donc deux chiffres selon l'endroit où
+  on la lisait, sans que rien ne l'explique ; c'est désormais écrit sous le menu
+  de lecture, et la ligne du panneau s'appelle « Éblouissement de face ».
 
 L'interface est volontairement sombre et peu contrastée. Une interface blanche
 pour une application destinée à des personnes que la lumière fait souffrir
@@ -1215,9 +1399,13 @@ Les précédentes portent sur les **données**. Celles-ci portent sur la
     une incompatibilité : le coût d'une arête dépendrait du chemin parcouru pour
     l'atteindre, ce qui retire à Dijkstra la propriété qui le rend correct. Il
     faudrait déplier l'état d'adaptation dans l'espace de recherche, donc
-    multiplier un graphe de 445 000 arêtes. Le faire **après coup**, sur un
-    trajet déjà calculé — signaler les transitions brutales ombre → plein
-    soleil — reste en revanche accessible.
+    multiplier un graphe de 445 000 arêtes.
+
+    Le faire **après coup**, sur un trajet déjà calculé, est en revanche
+    accessible — et c'est fait : les transitions brutales ombre → plein soleil
+    sont signalées dans la feuille de route et annoncées trente mètres avant
+    pendant le guidage (voir « Les passages brutaux »). Ça ne modélise toujours
+    pas l'adaptation ; ça dit où elle sera mise à l'épreuve.
 13. **Le scintillement n'a toujours pas de fréquence mesurée**, et n'en aura pas
     à cet échantillonnage : un point tous les 4 m plafonne la fréquence spatiale
     résoluble à 0,125 cycle/m, soit **0,17 Hz** — quand la bande déclenchante
@@ -1546,14 +1734,18 @@ web/
   src/
     main.js            carte, curseur temporel, panneau de détail
     binary.js          lecture du fichier de zone, par vues typées
-    routing.js         graphe piéton et A* pondéré
+    cells.js           chargement d'une région par cellules, couture des graphes
+    routing.js         graphe piéton, A* pondéré, passages brutaux
     navigation.js      manœuvres, recalage sur le tracé, hors-itinéraire
-    geocode.js         recherche de lieux
+    geocode.js         recherche de lieux — réseau, adresses BAN, Nominatim
+    link.js            ce qu'un lien porte : départ, arrivée, priorité
+    offline.js         ce qu'il faut télécharger pour tenir hors ligne
     shadows.js         ombres portées en direct sur canevas
     weather.js         prévision Open-Meteo (nébulosité, UV, flux mesurés)
     speech.js          annonces vocales et vibrations
     style.css
-  public/sw.js         service worker — fonctionnement hors ligne
+  test/                itinéraire, guidage, cellules, liens, hors-ligne
+  public/sw.js         service worker — hors ligne et préparation d'un secteur
   public/data/         sortie du pipeline (non versionné)
 ```
 

@@ -40,8 +40,12 @@ export async function loadRegionIndex(url) {
  * @param {object} options
  * @param {string} options.baseUrl préfixe des fichiers de cellule
  * @param {() => void} [options.onCellsChanged] appelé quand le jeu chargé change
+ * @param {(url: string) => Promise<object>} [options.load] lecteur d'un binaire
+ *   de cellule. Injectable pour une seule raison : la couture des graphes et la
+ *   libération des cellules sont la partie subtile de ce fichier, et les
+ *   éprouver ne doit demander ni réseau ni fichier de plusieurs mégaoctets.
  */
-export function createRegionData(index, { baseUrl, onCellsChanged }) {
+export function createRegionData(index, { baseUrl, onCellsChanged, load = loadZoneData }) {
   const bits = index.segmentBits;
   const localMask = (1 << bits) - 1;
 
@@ -80,7 +84,7 @@ export function createRegionData(index, { baseUrl, onCellsChanged }) {
     if (pending.has(rank)) return pending.get(rank);
 
     const version = cell.stamp ? `?v=${cell.stamp}` : '';
-    const promise = loadZoneData(`${baseUrl}${cell.key}.data.bin${version}`)
+    const promise = load(`${baseUrl}${cell.key}.data.bin${version}`)
       .then((data) => {
         const entry = { cell, data, usedAt: ++clock };
         loaded.set(rank, entry);

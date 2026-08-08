@@ -150,7 +150,8 @@ function mergeShortSteps(instructions) {
     const last = kept[kept.length - 1];
     if (current.type !== 'arrive' && current.distance - last.distance < 15) {
       // On garde la manœuvre la plus parlante des deux.
-      if (rank(current.type) > rank(last.type)) kept[kept.length - 1] = { ...current, distance: last.distance };
+      if (rank(current.type) > rank(last.type))
+        kept[kept.length - 1] = { ...current, distance: last.distance };
       continue;
     }
     kept.push(current);
@@ -159,9 +160,18 @@ function mergeShortSteps(instructions) {
 }
 
 const rank = (type) =>
-  ({ depart: 5, arrive: 5, crossing: 4, sharp_left: 3, sharp_right: 3, left: 3, right: 3, slight_left: 2, slight_right: 2, straight: 1 })[
-    type
-  ] ?? 0;
+  ({
+    depart: 5,
+    arrive: 5,
+    crossing: 4,
+    sharp_left: 3,
+    sharp_right: 3,
+    left: 3,
+    right: 3,
+    slight_left: 2,
+    slight_right: 2,
+    straight: 1,
+  })[type] ?? 0;
 
 function turnType(delta) {
   const a = Math.abs(delta);
@@ -189,7 +199,8 @@ export function describeManoeuvre(instruction) {
 
   let text = label;
   if (instruction.name && instruction.type !== 'arrive') {
-    text += instruction.type === 'crossing' ? ` vers ${instruction.name}` : ` — ${instruction.name}`;
+    text +=
+      instruction.type === 'crossing' ? ` vers ${instruction.name}` : ` — ${instruction.name}`;
   }
   // `label` et `name` sont renvoyés à part : la phrase parlée les recompose
   // autrement, sans tiret cadratin, que les moteurs de synthèse ânonnent.
@@ -230,6 +241,23 @@ export function snapToRoute(route, lon, lat, hint = null) {
   }
 
   return best;
+}
+
+/**
+ * Avancement forcé monotone le long de l'itinéraire.
+ *
+ * Le bruit du GPS fait reculer la position recalée de plusieurs mètres d'une
+ * mesure à l'autre — mesuré à 10 m avec un bruit de ± 6 m — et la distance à la
+ * prochaine manœuvre remonterait alors par à-coups, ce qui se lit comme une
+ * panne. On n'autorise donc le recul que s'il dépasse `allowBack` : en deçà
+ * c'est du bruit, au-delà c'est un demi-tour, et il faut le suivre.
+ *
+ * @param {number|null} previous avancement retenu jusqu'ici, en mètres
+ * @param {number} measured avancement que donne la position du moment
+ */
+export function advanceProgress(previous, measured, { allowBack = 25 } = {}) {
+  if (!Number.isFinite(previous)) return measured;
+  return measured > previous || previous - measured > allowBack ? measured : previous;
 }
 
 /** Prochaine manœuvre à annoncer, et distance qui en sépare. */
