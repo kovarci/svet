@@ -9,7 +9,11 @@
 export function metersPerDegree(lat) {
   const phi = (lat * Math.PI) / 180;
   return {
-    lat: 111132.92 - 559.82 * Math.cos(2 * phi) + 1.175 * Math.cos(4 * phi) - 0.0023 * Math.cos(6 * phi),
+    lat:
+      111132.92 -
+      559.82 * Math.cos(2 * phi) +
+      1.175 * Math.cos(4 * phi) -
+      0.0023 * Math.cos(6 * phi),
     lon: 111412.84 * Math.cos(phi) - 93.5 * Math.cos(3 * phi) + 0.118 * Math.cos(5 * phi),
   };
 }

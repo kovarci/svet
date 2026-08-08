@@ -121,7 +121,9 @@ async function main() {
         result.status === 'ok'
           ? `${String(result.segments).padStart(6)} tronçons · ${result.surfaceModel}`
           : result.error;
-      console.log(`  ${mark} ${label.padEnd(24)} ${formatDuration(seconds).padStart(10)}  ${detail}`);
+      console.log(
+        `  ${mark} ${label.padEnd(24)} ${formatDuration(seconds).padStart(10)}  ${detail}`,
+      );
 
       const freed = await pruneRasterCache(args.cacheBudget);
       if (freed > 0) console.log(`    cache rasters : ${(freed / 1e9).toFixed(1)} Go libérés`);
@@ -153,8 +155,10 @@ async function main() {
 
   console.log('\n▌ Aperçu régional');
   const overview = await writeOverview(outDir, cellDir, ok, region);
-  console.log(`  ${overview.tiles} tuiles de zoom ${OVERVIEW_MIN_ZOOM} à ${CELL_ZOOM - 1}` +
-    ` (${(overview.bytes / 1e6).toFixed(1)} Mo)`);
+  console.log(
+    `  ${overview.tiles} tuiles de zoom ${OVERVIEW_MIN_ZOOM} à ${CELL_ZOOM - 1}` +
+      ` (${(overview.bytes / 1e6).toFixed(1)} Mo)`,
+  );
 
   console.log('\n▌ Index régional');
   const index = await writeIndex(outDir, cellDir, region, origin, ok, manifest, date);
@@ -219,7 +223,10 @@ function runCell(cell, region, date, args) {
       }
       try {
         const meta = JSON.parse(
-          await readFile(path.join(OUT_ROOT, region.key, 'cellules', `${cell.key}.meta.json`), 'utf8'),
+          await readFile(
+            path.join(OUT_ROOT, region.key, 'cellules', `${cell.key}.meta.json`),
+            'utf8',
+          ),
         );
         resolve({
           status: 'ok',
@@ -314,7 +321,9 @@ async function writeOverview(outDir, cellDir, cells, region) {
   const features = [];
   for (const cell of cells) {
     try {
-      const part = JSON.parse(await readFile(path.join(cellDir, `${cell.key}.apercu.json`), 'utf8'));
+      const part = JSON.parse(
+        await readFile(path.join(cellDir, `${cell.key}.apercu.json`), 'utf8'),
+      );
       features.push(...part.features);
     } catch {
       // Une cellule sans aperçu est une cellule sans voie structurante : rien

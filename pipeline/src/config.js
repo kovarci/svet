@@ -10,7 +10,7 @@ export const ZONES = {
   // Contraste maximal entre ruelles médiévales (très ombragées) et quais ouverts.
   marais: {
     label: 'Marais — Île de la Cité — Bastille',
-    bbox: [2.3300, 48.8480, 2.3800, 48.8700], // [ouest, sud, est, nord]
+    bbox: [2.33, 48.848, 2.38, 48.87], // [ouest, sud, est, nord]
     res: 1.0, // taille de cellule du MNS, en mètres
   },
 
@@ -19,7 +19,7 @@ export const ZONES = {
   // que départ et arrivée tiennent dans la même emprise.
   centre: {
     label: 'Centre — Saint-Lazare · Louvre · Bastille',
-    bbox: [2.3080, 48.8480, 2.3800, 48.8830],
+    bbox: [2.308, 48.848, 2.38, 48.883],
     res: 1.5,
     // Emprise deux fois et demie plus grande : on relâche un peu la finesse
     // d'échantillonnage pour que le calcul reste sous le quart d'heure.
@@ -30,14 +30,14 @@ export const ZONES = {
   // Paris intra-muros. ~44 M cellules à 2 m : compter ~10-20 min et 2-3 Go de RAM.
   paris: {
     label: 'Paris intra-muros',
-    bbox: [2.2240, 48.8150, 2.4700, 48.9030],
+    bbox: [2.224, 48.815, 2.47, 48.903],
     res: 2.0,
   },
 
   // Petite zone pour itérer vite pendant le développement.
   test: {
     label: 'Test — Île de la Cité',
-    bbox: [2.3450, 48.8530, 2.3620, 48.8600],
+    bbox: [2.345, 48.853, 2.362, 48.86],
     res: 1.0,
   },
 };
@@ -217,7 +217,7 @@ export const CONFIG = {
   canopy: {
     kLeafOn: 0.265, // ~12 % de transmission sur 8 m de houppier
     kLeafOff: 0.075, // ~55 % de transmission sur 8 m, branches nues
-    kConifer: 0.30, // persistant, dense toute l'année
+    kConifer: 0.3, // persistant, dense toute l'année
     leafOnStart: '04-15',
     leafOnEnd: '11-05',
   },
@@ -231,7 +231,7 @@ export const CONFIG = {
     skyView: 0.18, // ouverture au ciel (luminance de fond, éblouissement diffus)
     brightness: 0.16, // éclairement reçu du ciel et du soleil
     reverb: 0.14, // ce que renvoient les façades éclairées, à hauteur des yeux
-    glare: 0.10, // soleil bas dans l'axe du regard — dépend du sens de marche
+    glare: 0.1, // soleil bas dans l'axe du regard — dépend du sens de marche
     flicker: 0.08, // alternance ombre/soleil le long du trajet
   },
 
@@ -242,7 +242,9 @@ export const CONFIG = {
 export function resolveZone(name) {
   const zone = ZONES[name];
   if (!zone) {
-    throw new Error(`Zone inconnue : "${name}". Zones disponibles : ${Object.keys(ZONES).join(', ')}`);
+    throw new Error(
+      `Zone inconnue : "${name}". Zones disponibles : ${Object.keys(ZONES).join(', ')}`,
+    );
   }
   const { label, bbox, res, ...overrides } = zone;
   return { key: name, label, bbox, res, overrides };

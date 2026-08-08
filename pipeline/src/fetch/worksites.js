@@ -49,7 +49,10 @@ export async function fetchWorksites(bbox, date) {
       select: 'geo_shape,localisation_detail,chantier_categorie,surface',
       limit: '-1',
     },
-    { label: 'Chantiers à Paris', cacheKey: `chantiers-${date}-${bbox.map((v) => v.toFixed(3)).join('_')}` },
+    {
+      label: 'Chantiers à Paris',
+      cacheKey: `chantiers-${date}-${bbox.map((v) => v.toFixed(3)).join('_')}`,
+    },
   );
 
   const list = Array.isArray(rows) ? rows : (rows.results ?? []);

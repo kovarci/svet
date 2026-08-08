@@ -106,12 +106,16 @@ test('la réfraction relève le soleil, et d’autant plus qu’il est bas', () 
   const liftAt = (deg) => (applyRefraction(deg / DEG) - deg / DEG) * DEG;
   const atHorizon = liftAt(0);
   const high = liftAt(45);
-  assert.ok(atHorizon > 0.4 && atHorizon < 0.7, `relèvement à l'horizon : ${atHorizon.toFixed(2)}°`);
+  assert.ok(
+    atHorizon > 0.4 && atHorizon < 0.7,
+    `relèvement à l'horizon : ${atHorizon.toFixed(2)}°`,
+  );
   assert.ok(high > 0 && high < atHorizon, 'la réfraction doit décroître avec la hauteur');
 });
 
 test('le soleil tourne dans le bon sens', () => {
-  const azimuthAt = (hour) => sunPosition(localToUTC('2026-06-21', hour, 0), PARIS.lat, PARIS.lon).azimuth * DEG;
+  const azimuthAt = (hour) =>
+    sunPosition(localToUTC('2026-06-21', hour, 0), PARIS.lat, PARIS.lon).azimuth * DEG;
   assert.ok(azimuthAt(8) < azimuthAt(12), 'le matin, le soleil va vers le sud');
   assert.ok(azimuthAt(12) < azimuthAt(18), 'l’après-midi, il va vers l’ouest');
   assert.ok(azimuthAt(8) > 45 && azimuthAt(8) < 120, `azimut à 8 h : ${azimuthAt(8).toFixed(0)}°`);
@@ -130,7 +134,14 @@ const baseline = {
 };
 
 test('l’indice reste borné entre 0 et 100, quoi qu’on lui donne', () => {
-  const weights = { directSun: 0.34, skyView: 0.18, brightness: 0.16, reverb: 0.14, glare: 0.1, flicker: 0.08 };
+  const weights = {
+    directSun: 0.34,
+    skyView: 0.18,
+    brightness: 0.16,
+    reverb: 0.14,
+    glare: 0.1,
+    flicker: 0.08,
+  };
   for (const transmission of [0, 0.5, 1]) {
     for (const svf of [0, 0.5, 1]) {
       for (const altitude of [-10, 0, 5, 30, 60]) {
@@ -148,7 +159,14 @@ test('l’indice reste borné entre 0 et 100, quoi qu’on lui donne', () => {
 });
 
 test('plus de soleil direct ne peut pas abaisser l’indice', () => {
-  const weights = { directSun: 0.34, skyView: 0.18, brightness: 0.16, reverb: 0.14, glare: 0.1, flicker: 0.08 };
+  const weights = {
+    directSun: 0.34,
+    skyView: 0.18,
+    brightness: 0.16,
+    reverb: 0.14,
+    glare: 0.1,
+    flicker: 0.08,
+  };
   let previous = -1;
   for (const transmission of [0, 0.25, 0.5, 0.75, 1]) {
     const index = discomfortIndex(components({ ...baseline, transmission }), weights);
@@ -330,7 +348,10 @@ test('sous un ciel couvert, une ruelle reçoit plus que sa part géométrique', 
     const profile = new Uint8Array(16).fill(wall);
     const svf = geometricSkyView(profile);
     const reach = overcast.factor(profile);
-    assert.ok(reach > svf, `murs à ${wall}° : ${reach.toFixed(3)} devrait dépasser le SVF ${svf.toFixed(3)}`);
+    assert.ok(
+      reach > svf,
+      `murs à ${wall}° : ${reach.toFixed(3)} devrait dépasser le SVF ${svf.toFixed(3)}`,
+    );
     assert.ok(reach <= 1, `facteur hors bornes : ${reach}`);
   }
 });
@@ -397,7 +418,11 @@ test('le sol éclairé pèse sur la réverbération', () => {
   // Le terme manquait entièrement. Une chaussée au soleil renvoie près de
   // 4 000 cd/m², dans la moitié basse du champ de vision.
   const lit = illuminance({ ...baseline, transmission: 1, horizon: new Uint8Array(16).fill(20) });
-  const shaded = illuminance({ ...baseline, transmission: 0, horizon: new Uint8Array(16).fill(20) });
+  const shaded = illuminance({
+    ...baseline,
+    transmission: 0,
+    horizon: new Uint8Array(16).fill(20),
+  });
   assert.ok(lit.groundLuminance > 2000, `sol au soleil : ${Math.round(lit.groundLuminance)} cd/m²`);
   assert.ok(
     lit.groundLuminance > shaded.groundLuminance,
@@ -638,7 +663,10 @@ test('un soleil dans l’axe de la rue n’ombre pas le mur d’en face', () => 
     `dans l’axe ${axe.sunlitWalls.toFixed(3)} devrait dépasser en travers ${travers.sunlitWalls.toFixed(3)}`,
   );
   for (const r of [axe, travers]) {
-    assert.ok(r.sunlitWalls >= 0 && r.sunlitWalls <= 1, `part éclairée hors bornes : ${r.sunlitWalls}`);
+    assert.ok(
+      r.sunlitWalls >= 0 && r.sunlitWalls <= 1,
+      `part éclairée hors bornes : ${r.sunlitWalls}`,
+    );
     assert.ok(Number.isFinite(r.luminance) && r.luminance >= 0);
   }
 });
@@ -810,9 +838,21 @@ test('les passages sous immeuble sont reconnus comme couverts', () => {
 });
 
 test('les côtés déclarés absents sont lus dans le bon sens', () => {
-  assert.deepEqual(declaredAbsent({ sidewalk: 'left' }), { left: false, right: true, separate: false });
-  assert.deepEqual(declaredAbsent({ sidewalk: 'right' }), { left: true, right: false, separate: false });
-  assert.deepEqual(declaredAbsent({ sidewalk: 'separate' }), { left: true, right: true, separate: true });
+  assert.deepEqual(declaredAbsent({ sidewalk: 'left' }), {
+    left: false,
+    right: true,
+    separate: false,
+  });
+  assert.deepEqual(declaredAbsent({ sidewalk: 'right' }), {
+    left: true,
+    right: false,
+    separate: false,
+  });
+  assert.deepEqual(declaredAbsent({ sidewalk: 'separate' }), {
+    left: true,
+    right: true,
+    separate: true,
+  });
   assert.equal(declaredAbsent({ sidewalk: 'both' }).left, false);
   assert.equal(declaredAbsent({}), null);
 });
@@ -834,7 +874,12 @@ test('l’UV local reste sous l’UV en site dégagé', () => {
     for (const t of [0, 0.5, 1]) {
       for (const svf of [0, 0.5, 1]) {
         // Y compris avec le partage direct/diffus variable.
-        for (const [alt, share] of [[null, null], [5, 0.2], [30, 0.7], [60, 0.9]]) {
+        for (const [alt, share] of [
+          [null, null],
+          [5, 0.2],
+          [30, 0.7],
+          [60, 0.9],
+        ]) {
           const local = localUV(uv, t, svf, alt, share);
           assert.ok(local <= uv + 1e-9, `UV local ${local} supérieur à ${uv}`);
           assert.ok(local >= 0);

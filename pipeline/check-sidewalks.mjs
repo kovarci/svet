@@ -144,7 +144,10 @@ for (const leg of legs) {
   if (previous && leg.side !== previous.side) {
     changes++;
     illegal++;
-    if (examples.length < 6) examples.push(`${previous.name ?? '—'} (${previous.side}) → ${leg.name ?? '—'} (${leg.side})`);
+    if (examples.length < 6)
+      examples.push(
+        `${previous.name ?? '—'} (${previous.side}) → ${leg.name ?? '—'} (${leg.side})`,
+      );
   } else if (previous && leg.side === previous.side) {
     // rien
   }
@@ -158,6 +161,6 @@ for (const e of examples) console.log(`      ${e}`);
 // ---- part du trajet sur un trottoir cartographié ---------------------------
 let named = 0;
 let unnamed = 0;
-for (const leg of legs) (leg.name ? named++ : unnamed++);
+for (const leg of legs) leg.name ? named++ : unnamed++;
 console.log(`\n  Étapes nommées : ${named} · sans nom : ${unnamed}\n`);
 void changes;

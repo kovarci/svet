@@ -75,7 +75,9 @@ for (const zone of zones) {
 
 const failed = results.filter((r) => r.code !== 0);
 const total = results.reduce((sum, r) => sum + r.seconds, 0);
-console.log(`\n  ${results.length - failed.length}/${results.length} zones · ${formatDuration(total)}`);
+console.log(
+  `\n  ${results.length - failed.length}/${results.length} zones · ${formatDuration(total)}`,
+);
 if (failed.length > 0) {
   console.error(`  Échecs : ${failed.map((f) => f.zone).join(', ')}`);
   console.error('  Relancez la zone seule pour voir le détail :');
@@ -89,7 +91,12 @@ function run(zone) {
   return new Promise((resolve) => {
     const child = spawn(
       process.execPath,
-      [`--max-old-space-size=${heap}`, path.join(HERE, 'src/build.js'), `--zone=${zone}`, '--date=today'],
+      [
+        `--max-old-space-size=${heap}`,
+        path.join(HERE, 'src/build.js'),
+        `--zone=${zone}`,
+        '--date=today',
+      ],
       // La sortie détaillée du build irait noyer le journal du planificateur ;
       // on ne garde que les erreurs, et le résumé par zone ci-dessus.
       { stdio: ['ignore', 'ignore', 'inherit'] },

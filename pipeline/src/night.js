@@ -111,9 +111,7 @@ export function indexLamps(lamps, projection) {
 /** La donnée d'éclairage existe-t-elle ici ? */
 export function coveredAt(index, x, y) {
   if (index.count === 0) return false;
-  return index.covered.has(
-    `${Math.round(x / COVERAGE_CELL)},${Math.round(y / COVERAGE_CELL)}`,
-  );
+  return index.covered.has(`${Math.round(x / COVERAGE_CELL)},${Math.round(y / COVERAGE_CELL)}`);
 }
 
 /**

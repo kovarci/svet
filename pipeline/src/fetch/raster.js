@@ -144,9 +144,7 @@ export async function fetchFloatRaster({ layer, bbox, targetRes, maxSide = 6000,
     }
   };
 
-  await Promise.all(
-    Array.from({ length: Math.min(TILE_CONCURRENCY, jobs.length) }, worker),
-  );
+  await Promise.all(Array.from({ length: Math.min(TILE_CONCURRENCY, jobs.length) }, worker));
   if (failed) return null;
   if (total > 1 && process.stdout.isTTY) process.stdout.write('\r' + ' '.repeat(50) + '\r');
 

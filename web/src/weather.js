@@ -65,8 +65,7 @@ export async function fetchForecast({ center, date, times, days = FORECAST_DAYS 
     // Les précipitations servent à mouiller la chaussée : une chaussée humide
     // réfléchit le soleil bas en miroir, ce qui est l'une des situations les
     // plus pénibles pour ce public et que le modèle ignorait entièrement.
-    hourly:
-      'cloud_cover,uv_index,direct_normal_irradiance,diffuse_radiation,precipitation',
+    hourly: 'cloud_cover,uv_index,direct_normal_irradiance,diffuse_radiation,precipitation',
     timezone: 'Europe/Paris',
     start_date: date,
     end_date: addDays(date, Math.max(1, days) - 1),
@@ -88,7 +87,8 @@ export async function fetchForecast({ center, date, times, days = FORECAST_DAYS 
   // fenêtre il renvoie des valeurs vides plutôt qu'une erreur.
   if (clouds.every((value) => value === null)) return null;
 
-  const measured = beam?.some((value) => value !== null) && diffuse?.some((value) => value !== null);
+  const measured =
+    beam?.some((value) => value !== null) && diffuse?.some((value) => value !== null);
 
   // Les heures arrivent à plat, tous jours confondus : on les regroupe par
   // date avant d'interpoler, sans quoi 23 h de lundi et 0 h de mardi seraient

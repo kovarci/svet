@@ -12,9 +12,25 @@ const ODS_URL =
 
 /** Genres à feuillage persistant : ils ombragent toute l'année. */
 const EVERGREEN = new Set([
-  'Pinus', 'Cedrus', 'Picea', 'Abies', 'Taxus', 'Cupressus', 'Cupressocyparis',
-  'Chamaecyparis', 'Thuja', 'Sequoia', 'Sequoiadendron', 'Ilex', 'Juniperus',
-  'Cryptomeria', 'Araucaria', 'Quercus ilex', 'Photinia', 'Laurus', 'Eriobotrya',
+  'Pinus',
+  'Cedrus',
+  'Picea',
+  'Abies',
+  'Taxus',
+  'Cupressus',
+  'Cupressocyparis',
+  'Chamaecyparis',
+  'Thuja',
+  'Sequoia',
+  'Sequoiadendron',
+  'Ilex',
+  'Juniperus',
+  'Cryptomeria',
+  'Araucaria',
+  'Quercus ilex',
+  'Photinia',
+  'Laurus',
+  'Eriobotrya',
 ]);
 
 export async function fetchTrees(bbox) {
@@ -23,7 +39,8 @@ export async function fetchTrees(bbox) {
     ODS_URL,
     {
       where: `in_bbox(geo_point_2d, ${south}, ${west}, ${north}, ${east}) and typeemplacement = "Arbre"`,
-      select: 'geo_point_2d,hauteurenm,circonferenceencm,stadedeveloppement,genre,espece,domanialite',
+      select:
+        'geo_point_2d,hauteurenm,circonferenceencm,stadedeveloppement,genre,espece,domanialite',
       limit: '-1',
     },
     { label: 'Arbres de Paris' },
@@ -53,9 +70,10 @@ export function crownGeometry(tree) {
     const dbh = circumference / Math.PI; // diamètre à hauteur de poitrine, en cm
     radius = 0.6 + 0.11 * dbh;
   } else {
-    radius = { 'Jeune (arbre)': 1.5, 'Jeune (arbre)Adulte': 2.5, Adulte: 4, Mature: 5.5 }[
-      tree.stadedeveloppement
-    ] ?? 3;
+    radius =
+      { 'Jeune (arbre)': 1.5, 'Jeune (arbre)Adulte': 2.5, Adulte: 4, Mature: 5.5 }[
+        tree.stadedeveloppement
+      ] ?? 3;
   }
 
   radius = Math.max(1, Math.min(radius, 9, height * 0.5));

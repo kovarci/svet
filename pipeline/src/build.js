@@ -3,7 +3,13 @@ import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 
 import { CONFIG, resolveZone } from './config.js';
-import { resolveRegion, parseCellKey, gridOrigin, cellIdBase, MAX_SEGMENTS_PER_CELL } from './region.js';
+import {
+  resolveRegion,
+  parseCellKey,
+  gridOrigin,
+  cellIdBase,
+  MAX_SEGMENTS_PER_CELL,
+} from './region.js';
 import { createProjection, padBbox } from './lib/geo.js';
 import { localToUTC, sunPosition, applyRefraction, DEG } from './lib/sun.js';
 import { fetchBuildings, buildingHeight } from './fetch/buildings.js';
@@ -55,7 +61,9 @@ async function main() {
   const config = { ...CONFIG, ...zone.overrides, ...args, idBase: zone.idBase };
 
   console.log(`\n▌ SVET — ${zone.label}`);
-  console.log(`  emprise ${zone.bbox.map((v) => v.toFixed(4)).join(', ')} · maille ${zone.res} m · ${config.date}\n`);
+  console.log(
+    `  emprise ${zone.bbox.map((v) => v.toFixed(4)).join(', ')} · maille ${zone.res} m · ${config.date}\n`,
+  );
 
   // Chronométrage par étape. Sans lui, on ne sait pas ce qu'on paie : c'est ce
   // qui décide de ce qu'une reconstruction quotidienne doit refaire et de ce
@@ -136,7 +144,9 @@ async function main() {
     worksites = await fetchWorksites(zone.bbox, config.date);
     console.log(`     ${worksites.length} emprises de chantier sur trottoir (Ville de Paris)`);
   } catch (error) {
-    console.log(`     ⚠ chantiers indisponibles (${error.message}) — les trottoirs seront tous réputés libres`);
+    console.log(
+      `     ⚠ chantiers indisponibles (${error.message}) — les trottoirs seront tous réputés libres`,
+    );
   }
 
   mark('téléchargement');
@@ -167,7 +177,7 @@ async function main() {
     vector: 'vectorielle',
   }[stats.model];
   console.log(
-    `     grille ${grid.width} × ${grid.height} (${(grid.width * grid.height / 1e6).toFixed(1)} M cellules)` +
+    `     grille ${grid.width} × ${grid.height} (${((grid.width * grid.height) / 1e6).toFixed(1)} M cellules)` +
       ` · géométrie ${geometryLabel}`,
   );
   if (stats.model.startsWith('lidar')) {
@@ -188,11 +198,19 @@ async function main() {
 
   // -------------------------------------------------------- réseau piéton
   console.log('\n3/5  Découpage du réseau piéton');
-  const { segments, points, sidewalks, cover } = buildSegments(ways, projection, zone.bbox, config, grid);
+  const { segments, points, sidewalks, cover } = buildSegments(
+    ways,
+    projection,
+    zone.bbox,
+    config,
+    grid,
+  );
   const twoSided = segments.filter((s) => !s.shared).length;
   const crossings = segments.filter((s) => s.crossing).length;
   const measured = segments.filter((s) => s.measuredWidth !== null).length;
-  console.log(`     ${segments.length} tronçons · ${twoSided} à deux trottoirs · ${crossings} traversées`);
+  console.log(
+    `     ${segments.length} tronçons · ${twoSided} à deux trottoirs · ${crossings} traversées`,
+  );
   console.log(`     largeur mesurée sur ${measured} tronçons · ${points.x.length} points`);
   console.log(
     `     trottoirs cartographiés : ${sidewalks.axeSupprime} axes effacés (deux côtés réels), ` +
@@ -386,7 +404,10 @@ async function main() {
       JSON.stringify(toOverviewGeoJSON(network)),
     );
   }
-  await writeFile(path.join(zone.dataDir, `${zone.key}.buildings.json`), JSON.stringify(footprints));
+  await writeFile(
+    path.join(zone.dataDir, `${zone.key}.buildings.json`),
+    JSON.stringify(footprints),
+  );
   // Enregistrements construits explicitement, et non par recopie des propriétés
   // GeoJSON : les noms diffèrent des deux côtés (`len`/`length`, `hw`/`highway`)
   // et un champ oublié se serait encodé en zéro sans rien signaler.
@@ -497,7 +518,9 @@ async function main() {
   mark('empaquetage');
 
   console.log(`\n✓ Écrit dans ${zone.dataDir}`);
-  console.log(`  ${zone.key}.data.bin · ${zone.key}.geometry.json · ${zone.key}.buildings.json · ${zone.key}.meta.json`);
+  console.log(
+    `  ${zone.key}.data.bin · ${zone.key}.geometry.json · ${zone.key}.buildings.json · ${zone.key}.meta.json`,
+  );
 
   const total = timings.reduce((sum, t) => sum + t.seconds, 0);
   console.log(`\n  Temps par étape (${formatDuration(total)} au total)`);
@@ -708,9 +731,7 @@ function buildSegments(ways, projection, bbox, config, grid) {
       // 41 % des axes sont doublés des deux côtés, 20 % d'un seul, 38 % d'aucun.
       // Un graphe purement trottoir serait donc troué sur plus du tiers de la
       // ville — d'où ce traitement côté par côté plutôt qu'un basculement net.
-      const cover = isAxis
-        ? coverageAlong(sidewalkIndex, samples)
-        : { left: false, right: false };
+      const cover = isAxis ? coverageAlong(sidewalkIndex, samples) : { left: false, right: false };
 
       // Là où rien n'est dessiné, la rue peut quand même dire ce qu'elle porte.
       // 11 683 rues parisiennes le déclarent — assez pour ne pas inventer un
@@ -740,9 +761,10 @@ function buildSegments(ways, projection, bbox, config, grid) {
       // à décrire, l'autre a sa propre géométrie.
       const halved = cover.left || cover.right;
       const shared = nominal === 0 || halved;
-      const { left, right, width } = nominal === 0
-        ? { left: samples.map(() => 0), right: samples.map(() => 0), width: null }
-        : measureSidewalks(grid, samples, nominal, config);
+      const { left, right, width } =
+        nominal === 0
+          ? { left: samples.map(() => 0), right: samples.map(() => 0), width: null }
+          : measureSidewalks(grid, samples, nominal, config);
       if (halved) tally.cotéSupprime++;
 
       const makeSide = (range, east, north) => ({
@@ -790,7 +812,9 @@ function buildSegments(ways, projection, bbox, config, grid) {
   const cover = new Uint8Array(xs.length);
   for (const segment of segments) {
     if (!segment.cover) continue;
-    for (const side of segment.left === segment.right ? [segment.left] : [segment.left, segment.right]) {
+    for (const side of segment.left === segment.right
+      ? [segment.left]
+      : [segment.left, segment.right]) {
       cover.fill(segment.cover, side.first, side.first + side.count);
     }
   }
@@ -1214,7 +1238,11 @@ async function updateZoneIndex(zone, meta) {
 
 function buildTimeSteps(config) {
   const steps = [];
-  for (let minutes = config.hourStart * 60; minutes <= config.hourEnd * 60; minutes += config.stepMinutes) {
+  for (
+    let minutes = config.hourStart * 60;
+    minutes <= config.hourEnd * 60;
+    minutes += config.stepMinutes
+  ) {
     const hour = Math.floor(minutes / 60);
     const minute = minutes % 60;
     steps.push({
@@ -1238,8 +1266,7 @@ function parseArgs(argv) {
       // `--date=today` permet de planifier une régénération quotidienne sans
       // réécrire la date dans la commande.
       out.date = value === 'today' ? new Date().toISOString().slice(0, 10) : value;
-    }
-    else if (arg.startsWith('--step=')) out.stepMinutes = Number(arg.slice(7));
+    } else if (arg.startsWith('--step=')) out.stepMinutes = Number(arg.slice(7));
   }
   return out;
 }

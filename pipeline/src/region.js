@@ -85,7 +85,7 @@ export const REGIONS = {
     /** Code INSEE de la région dans la BD TOPO — sert à récupérer son contour. */
     insee: '11',
     /** Emprise englobante, resserrée ensuite sur le contour réel. */
-    bbox: [1.4461, 48.1200, 3.5590, 49.2415],
+    bbox: [1.4461, 48.12, 3.559, 49.2415],
     /** Maille du modèle de surface, en mètres. Celle de Paris intra-muros. */
     res: 2.0,
   },

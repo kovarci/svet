@@ -35,7 +35,9 @@ const MIN_LIDAR_COVERAGE = 0.02;
  * particulier.
  */
 export function buildDSM(options) {
-  return options.config.surfaceModel === 'vector' ? buildFromVectors(options) : buildFromLidar(options);
+  return options.config.surfaceModel === 'vector'
+    ? buildFromVectors(options)
+    : buildFromLidar(options);
 }
 
 /**
@@ -65,7 +67,16 @@ export function buildDSM(options) {
  * des dalles de livraison — deux rues voisines décrites par deux modèles
  * différents, avec des indices qui ne se comparent plus.
  */
-async function buildFromLidar({ projection, res, bbox, buildings, trees, vegetation = [], config, date }) {
+async function buildFromLidar({
+  projection,
+  res,
+  bbox,
+  buildings,
+  trees,
+  vegetation = [],
+  config,
+  date,
+}) {
   // Sondage préalable, à 64 pixels de côté.
   //
   // Le service ne dit jamais « je n'ai pas volé ici » : il répond une dalle
@@ -98,7 +109,9 @@ async function buildFromLidar({ projection, res, bbox, buildings, trees, vegetat
   });
 
   if (!surface || !above) {
-    process.stdout.write('  ⚠ LiDAR indisponible sur cette emprise — repli sur le modèle vectoriel\n');
+    process.stdout.write(
+      '  ⚠ LiDAR indisponible sur cette emprise — repli sur le modèle vectoriel\n',
+    );
     return buildFromVectors({ projection, res, bbox, buildings, trees, vegetation, config, date });
   }
 
@@ -144,11 +157,7 @@ async function buildFromLidar({ projection, res, bbox, buildings, trees, vegetat
   const groundRange = extent(grid.ground);
 
   // Où est le bâti ? Les emprises bâties, élargies de la marge de corniche.
-  const builtMask = dilateMask(
-    grid,
-    maskOf(grid, buildings, projection),
-    config.roofOverhang ?? 2,
-  );
+  const builtMask = dilateMask(grid, maskOf(grid, buildings, projection), config.roofOverhang ?? 2);
 
   let builtCells = 0;
   let canopyCells = 0;
@@ -220,7 +229,17 @@ async function buildFromLidar({ projection, res, bbox, buildings, trees, vegetat
 }
 
 /** Construction vectorielle : emprises extrudées, houppiers en dôme, bois en dalles. */
-async function buildFromVectors({ projection, res, bbox, terrain, buildings, trees, vegetation = [], config, date }) {
+async function buildFromVectors({
+  projection,
+  res,
+  bbox,
+  terrain,
+  buildings,
+  trees,
+  vegetation = [],
+  config,
+  date,
+}) {
   const relief =
     terrain ??
     (await fetchFloatRaster({
@@ -266,7 +285,10 @@ async function buildFromVectors({ projection, res, bbox, terrain, buildings, tre
  * cellules non mesurées. C'est le même geste dans les deux cas ; le dupliquer
  * aurait garanti que les deux versions divergent à la première correction.
  */
-function stampVectors(grid, { projection, buildings, trees = [], vegetation = [], config, leafOn, gapsOnly }) {
+function stampVectors(
+  grid,
+  { projection, buildings, trees = [], vegetation = [], config, leafOn, gapsOnly },
+) {
   const heightScale = config.buildingHeightScale ?? 1;
   for (const feature of buildings) {
     const height = buildingHeight(feature.properties, config.defaultBuildingHeight) * heightScale;

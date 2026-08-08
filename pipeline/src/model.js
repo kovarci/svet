@@ -159,10 +159,7 @@ export function skyConditions(altitude, cloud = 0, irradiance = null, azimuth = 
 
   // Le reste du global part en diffus, plafonné : sous ciel voilé lumineux on
   // mesure jusqu'à ~45 000 lux d'éclairement diffus horizontal, jamais plus.
-  const diffuseHorizontal = Math.min(
-    MAX_DIFFUSE,
-    Math.max(0, globalCloudy - directNormal * sinH),
-  );
+  const diffuseHorizontal = Math.min(MAX_DIFFUSE, Math.max(0, globalCloudy - directNormal * sinH));
 
   return withDistribution(
     {
@@ -454,7 +451,7 @@ export function reverberation(horizon, altitude, azimuth, sky, albedo) {
 /** Élévation d'horizon dans une direction quelconque, interpolée entre secteurs. */
 function horizonAt(horizon, azimuth) {
   const bins = horizon.length;
-  const position = (((azimuth / (2 * Math.PI)) * bins) % bins + bins) % bins;
+  const position = ((((azimuth / (2 * Math.PI)) * bins) % bins) + bins) % bins;
   const i = Math.floor(position);
   const j = (i + 1) % bins;
   const t = position - i;
@@ -499,7 +496,8 @@ export function illuminance({
   const walls = horizon
     ? reverberation(horizon, altitude, azimuth, sky, albedo)
     : (() => {
-        const flat = (1 - svf) * albedo * (sky.directNormal * sky.sinH + sky.diffuseHorizontal) * 0.3;
+        const flat =
+          (1 - svf) * albedo * (sky.directNormal * sky.sinH + sky.diffuseHorizontal) * 0.3;
         return { lux: flat, luminance: flat / Math.PI, sunlitWalls: 0, wallView: 1 - svf };
       })();
 
@@ -633,15 +631,7 @@ export function illuminance({
  * exposition égale — à midi le soleil cogne d'aplomb, le soir il arrive dans
  * l'axe du regard.
  */
-export function glareFactor({
-  transmission,
-  altitude,
-  azimuth,
-  heading,
-  cloud = 0,
-  wet = 0,
-  sky,
-}) {
+export function glareFactor({ transmission, altitude, azimuth, heading, cloud = 0, wet = 0, sky }) {
   if (altitude <= 0 || transmission <= 0) return 0;
   sky ??= skyConditions(altitude, cloud);
   const altitudeDeg = altitude * (180 / Math.PI);
@@ -944,8 +934,10 @@ function luminaireIntensity(flux, gamma) {
   const deg = (gamma * 180) / Math.PI;
   let shape;
   if (deg < 55) shape = 1;
-  else if (deg < 70) shape = 1 + (0.5 * (deg - 55)) / 15; // le faisceau porte sur la chaussée
-  else if (deg < 85) shape = 1.5 - (1.25 * (deg - 70)) / 15; // défilement
+  else if (deg < 70)
+    shape = 1 + (0.5 * (deg - 55)) / 15; // le faisceau porte sur la chaussée
+  else if (deg < 85)
+    shape = 1.5 - (1.25 * (deg - 70)) / 15; // défilement
   else shape = 0.25 - Math.min(0.2, (0.2 * (deg - 85)) / 5);
   return mean * Math.max(0.05, shape);
 }
@@ -1177,7 +1169,16 @@ export function levelLabel(index) {
 }
 
 /** Les huit orientations cardinales, dans l'ordre horaire depuis le nord. */
-export const CARDINALS = ['nord', 'nord-est', 'est', 'sud-est', 'sud', 'sud-ouest', 'ouest', 'nord-ouest'];
+export const CARDINALS = [
+  'nord',
+  'nord-est',
+  'est',
+  'sud-est',
+  'sud',
+  'sud-ouest',
+  'ouest',
+  'nord-ouest',
+];
 
 /**
  * Types de voie retenus, dans un ordre figé.
@@ -1186,8 +1187,20 @@ export const CARDINALS = ['nord', 'nord-est', 'est', 'sud-est', 'sud', 'sud-oues
  * réordonner invaliderait silencieusement toutes les données déjà calculées.
  */
 export const HIGHWAYS = [
-  'footway', 'residential', 'service', 'pedestrian', 'path', 'steps', 'cycleway',
-  'living_street', 'tertiary', 'secondary', 'primary', 'unclassified', 'track', 'road',
+  'footway',
+  'residential',
+  'service',
+  'pedestrian',
+  'path',
+  'steps',
+  'cycleway',
+  'living_street',
+  'tertiary',
+  'secondary',
+  'primary',
+  'unclassified',
+  'track',
+  'road',
 ];
 
 /** Nom cardinal d'une direction, pour désigner un trottoir. */

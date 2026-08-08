@@ -65,8 +65,9 @@ for (const way of ways) {
   km[key] += (samples.length * STEP) / 1000;
 
   const says = tags.sidewalk ?? (tags['sidewalk:both'] ? 'both' : null);
-  if (says === 'both') (left && right ? declared.accord++ : declared.desaccord++);
-  else if (says === 'no' || says === 'none') (!left && !right ? declared.accord++ : declared.desaccord++);
+  if (says === 'both') left && right ? declared.accord++ : declared.desaccord++;
+  else if (says === 'no' || says === 'none')
+    !left && !right ? declared.accord++ : declared.desaccord++;
   else declared.muet++;
 }
 

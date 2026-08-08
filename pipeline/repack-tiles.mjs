@@ -49,4 +49,6 @@ for (const key of zones) {
 }
 
 writeFileSync(path.join(OUT_DIR, 'zones.json'), `${JSON.stringify(index, null, 2)}\n`);
-console.log('\n  zones.json réhorodaté — les anciennes tuiles ne seront plus servies par le cache.\n');
+console.log(
+  '\n  zones.json réhorodaté — les anciennes tuiles ne seront plus servies par le cache.\n',
+);

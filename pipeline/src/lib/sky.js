@@ -365,8 +365,7 @@ export function skyDistribution({ altitude, azimuth, epsilon, bins = 16 }) {
       const k = Math.floor(position);
       const next = Math.min(WALL_ELEVATION_BANDS, k + 1);
       return (
-        blendedWall[base + k] +
-        (blendedWall[base + next] - blendedWall[base + k]) * (position - k)
+        blendedWall[base + k] + (blendedWall[base + next] - blendedWall[base + k]) * (position - k)
       );
     },
     /**

@@ -38,7 +38,12 @@ export async function getJSON(url, params = {}, { cacheKey, label } = {}) {
 
 /** POST de formulaire (Overpass n'accepte que ça pour les requêtes longues). */
 export async function postForm(url, body, { cacheKey, label } = {}) {
-  const key = cacheKey ?? createHash('sha1').update(url + JSON.stringify(body)).digest('hex').slice(0, 16);
+  const key =
+    cacheKey ??
+    createHash('sha1')
+      .update(url + JSON.stringify(body))
+      .digest('hex')
+      .slice(0, 16);
   const cacheFile = path.join(CACHE_DIR, `${key}.json`);
 
   try {

@@ -239,7 +239,10 @@ export async function writeData(outDir, zoneKey, { segments, timeSteps, horizonB
       base + 3,
     );
     buffer.writeUInt16LE(clamp(Math.round(segment.length * 10), 0, 65535), base + 4);
-    buffer.writeUInt8(segment.width === null ? 255 : clamp(Math.round(segment.width * 2), 0, 254), base + 6);
+    buffer.writeUInt8(
+      segment.width === null ? 255 : clamp(Math.round(segment.width * 2), 0, 254),
+      base + 6,
+    );
     buffer.writeUInt8(clamp(Math.round(segment.lOff * 10), 0, 255), base + 7);
     buffer.writeUInt8(clamp(Math.round(segment.rOff * 10), 0, 255), base + 8);
     buffer.writeUInt8(CARDINALS.indexOf(segment.lSide) & 7, base + 9);

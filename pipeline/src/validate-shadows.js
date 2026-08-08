@@ -56,7 +56,7 @@ const OUT_DIR = path.resolve(fileURLToPath(new URL('../validation', import.meta.
  * sensible à la hauteur du soleil. Les cours du Louvre cochent tout, et la
  * Seine reste hors emprise — une rivière est sombre sans être à l'ombre.
  */
-const DEFAULT_BBOX = [2.3330, 48.8600, 2.3400, 48.8635];
+const DEFAULT_BBOX = [2.333, 48.86, 2.34, 48.8635];
 
 /** Résolution de comparaison, en mètres par pixel. */
 const DEFAULT_RES = 0.6;
@@ -84,7 +84,7 @@ async function main() {
   }
   if (args.date) flights = [{ date: args.date, source: 'imposée en ligne de commande' }];
   if (flights.length === 0) {
-    throw new Error("Aucune date de vol connue pour cette emprise. Précisez --date=AAAA-MM-JJ.");
+    throw new Error('Aucune date de vol connue pour cette emprise. Précisez --date=AAAA-MM-JJ.');
   }
   for (const flight of flights) {
     console.log(
@@ -115,8 +115,12 @@ async function main() {
     config: { ...CONFIG, surfaceModel: args.model ?? CONFIG.surfaceModel },
     date: flights[0].date,
   });
-  console.log(`     géométrie ${stats.model === 'lidar' ? 'LiDAR HD' : 'vectorielle'} · ${buildings.length} bâtiments · ${trees.length} arbres`);
-  console.log(`     grille ${grid.width} × ${grid.height} · point le plus haut ${stats.maxHeight.toFixed(0)} m`);
+  console.log(
+    `     géométrie ${stats.model === 'lidar' ? 'LiDAR HD' : 'vectorielle'} · ${buildings.length} bâtiments · ${trees.length} arbres`,
+  );
+  console.log(
+    `     grille ${grid.width} × ${grid.height} · point le plus haut ${stats.maxHeight.toFixed(0)} m`,
+  );
 
   // Chaque pixel de l'image, ramené sur la grille ; on ne garde que le sol nu.
   const samples = collectOpenGround(ortho, projection, grid);
@@ -131,7 +135,15 @@ async function main() {
   let best = null;
   for (const flight of flights) {
     const coarse = sweep(grid, samples, flight.date, 6 * 60, 21 * 60, 10, 4);
-    const refined = sweep(grid, samples, flight.date, coarse.minutes - 15, coarse.minutes + 15, 2, 1);
+    const refined = sweep(
+      grid,
+      samples,
+      flight.date,
+      coarse.minutes - 15,
+      coarse.minutes + 15,
+      2,
+      1,
+    );
     const winner = refined.r > coarse.r ? refined : coarse;
     console.log(
       `     ${flight.date} → ${formatClock(winner.minutes)} · corrélation ${winner.r.toFixed(3)}` +
@@ -143,7 +155,16 @@ async function main() {
   report(grid, samples, best);
   if (!args.brief) {
     profile(grid, samples, best);
-    await heightSweep({ projection, dataBbox, buildings, trees, ortho, best, bbox, model: stats.model });
+    await heightSweep({
+      projection,
+      dataBbox,
+      buildings,
+      trees,
+      ortho,
+      best,
+      bbox,
+      model: stats.model,
+    });
     await writeComparison(ortho, samples, grid, best, bbox);
   }
 
@@ -166,7 +187,8 @@ async function main() {
 
 /** Accord pixel et intersection sur union, à l'heure retenue. */
 function machineScore(grid, samples, best, ortho, res) {
-  const { agreement, iou, sunMean, shadowMean } = report(grid, samples, best, { quiet: true }) ?? {};
+  const { agreement, iou, sunMean, shadowMean } =
+    report(grid, samples, best, { quiet: true }) ?? {};
 
   // Dispersion de la luminance **à l'intérieur** de chaque classe. C'est elle
   // qui dit si un site est jugeable : sur du gravier mêlé de pelouse et de
@@ -187,9 +209,7 @@ function machineScore(grid, samples, best, ortho, res) {
       shadowN++;
     }
   }
-  const spread = Math.sqrt(
-    (sunVar + shadowVar) / Math.max(1, sunN + shadowN - 2),
-  );
+  const spread = Math.sqrt((sunVar + shadowVar) / Math.max(1, sunN + shadowN - 2));
 
   const best2 = bestPossibleSplit(samples);
   const sharp = sharpness(grid, samples, best);
@@ -224,7 +244,11 @@ function machineScore(grid, samples, best, ortho, res) {
     decoyMedian: decoy ? Number(decoy.median.toFixed(2)) : null,
     // Part du plafond que le modèle atteint. Proche de 1 : le modèle fait aussi
     // bien qu'on peut faire ici, et ce qui manque tient au site.
-    reach: Number((((sunMean - shadowMean) / Math.max(1, spread)) / Math.max(0.01, best2.separability)).toFixed(2)),
+    reach: Number(
+      ((sunMean - shadowMean) / Math.max(1, spread) / Math.max(0.01, best2.separability)).toFixed(
+        2,
+      ),
+    ),
   };
 }
 
@@ -266,7 +290,7 @@ function sharpness(grid, samples, best) {
     const other = transmissionField(grid, samples, altitude, raw.azimuth);
     let same = 0;
     for (let i = 0; i < samples.count; i++) {
-      if ((reference[i] > 0.5) === (other[i] > 0.5)) same++;
+      if (reference[i] > 0.5 === other[i] > 0.5) same++;
     }
     overlap = same / Math.max(1, samples.count);
   }
@@ -380,7 +404,7 @@ function edgeAccuracy(ortho, samples, grid, best, metresPerPixel) {
   const errors = [];
   for (let p = 0; p < size; p++) {
     if (!modelEdges[p] || distance[p] >= INF) continue;
-    errors.push(((distance[p] / 3) * metresPerPixel));
+    errors.push((distance[p] / 3) * metresPerPixel);
   }
   if (errors.length < 50) return null;
 
@@ -734,7 +758,9 @@ function report(grid, samples, best, { quiet = false } = {}) {
   );
   console.log(`  Corrélation              ${best.r.toFixed(3)}`);
   console.log(`  Accord pixel à pixel     ${((100 * agree) / samples.count).toFixed(1)} %`);
-  console.log(`  Recouvrement des ombres  ${((100 * intersection) / Math.max(union, 1)).toFixed(1)} % (IoU)`);
+  console.log(
+    `  Recouvrement des ombres  ${((100 * intersection) / Math.max(union, 1)).toFixed(1)} % (IoU)`,
+  );
   console.log(
     `  Luminance moyenne        ${sunMean.toFixed(0)} au soleil contre ` +
       `${shadowMean.toFixed(0)} à l’ombre (écart ${(sunMean - shadowMean).toFixed(0)})`,
@@ -761,10 +787,14 @@ function report(grid, samples, best, { quiet = false } = {}) {
 function judgeSite(samples, best, contrast) {
   const reasons = [];
   if (contrast < 55) reasons.push(`contraste faible (${contrast.toFixed(0)} niveaux de gris)`);
-  if (best.shadowShare < 0.12) reasons.push(`trop peu d’ombre (${Math.round(best.shadowShare * 100)} %)`);
-  if (best.shadowShare > 0.6) reasons.push(`presque tout à l’ombre (${Math.round(best.shadowShare * 100)} %)`);
+  if (best.shadowShare < 0.12)
+    reasons.push(`trop peu d’ombre (${Math.round(best.shadowShare * 100)} %)`);
+  if (best.shadowShare > 0.6)
+    reasons.push(`presque tout à l’ombre (${Math.round(best.shadowShare * 100)} %)`);
   if (samples.canopyShare > 0.2) {
-    reasons.push(`couvert arboré envahissant (${Math.round(samples.canopyShare * 100)} % de l’image)`);
+    reasons.push(
+      `couvert arboré envahissant (${Math.round(samples.canopyShare * 100)} % de l’image)`,
+    );
   }
 
   if (reasons.length === 0) {
@@ -838,7 +868,9 @@ async function writeComparison(ortho, samples, grid, best, bbox) {
   const file = path.join(OUT_DIR, name);
   await writePNG(file, wide, height, rgb);
   console.log(`\n  Comparaison écrite : ${file}`);
-  console.log('  À gauche l’image aérienne, au centre l’ombre observée, à droite l’ombre calculée.');
+  console.log(
+    '  À gauche l’image aérienne, au centre l’ombre observée, à droite l’ombre calculée.',
+  );
   console.log(`  Emprise ${bbox.map((v) => v.toFixed(4)).join(', ')}\n`);
 }
 

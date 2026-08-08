@@ -26,7 +26,8 @@ const HORIZON_BINS = 4;
 /** Une zone jouet : deux tronçons à un côté, un à deux côtés. */
 function fixture() {
   const series = (seed) => Array.from({ length: TIME_STEPS }, (_, i) => (seed * 7 + i * 13) % 256);
-  const profile = (seed) => Array.from({ length: HORIZON_BINS }, (_, i) => (seed * 5 + i * 11) % 90);
+  const profile = (seed) =>
+    Array.from({ length: HORIZON_BINS }, (_, i) => (seed * 5 + i * 11) % 90);
 
   const make = (id, shared) => ({
     name: id === 1 ? null : `Rue numéro ${id}`,

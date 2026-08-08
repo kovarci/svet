@@ -154,7 +154,9 @@ console.log(
   `\n  Plafond du site (séparation optimale de l’image, méthode d’Otsu) contre` +
     ` corrélation obtenue : ρ = ${rho.toFixed(2)}`,
 );
-console.log(`  Part du plafond atteinte par le modèle : ${(100 * meanReach).toFixed(0)} % en moyenne`);
+console.log(
+  `  Part du plafond atteinte par le modèle : ${(100 * meanReach).toFixed(0)} % en moyenne`,
+);
 // Le verdict : l'accord tient-il à l'heure, ou à la surface ?
 const collapses = ok.map((r) => r.collapse);
 const worstCollapse = ok.reduce((a, b) => (b.collapse < a.collapse ? b : a));
@@ -181,10 +183,10 @@ if (withEdges.length > 0) {
   console.log(
     median(gains) > 1.5
       ? '    Le vrai soleil place les bords nettement mieux qu’un soleil faux :\n' +
-        '    la mesure discrimine, et le chiffre en mètres veut dire quelque chose.'
+          '    la mesure discrimine, et le chiffre en mètres veut dire quelque chose.'
       : '    Le témoin fait presque aussi bien : dans ces images, un bord calculé\n' +
-        '    tombe près d’un bord observé quel que soit le soleil. La mesure ne\n' +
-        '    sépare pas assez pour qu’on lise le chiffre en mètres comme une justesse.',
+          '    tombe près d’un bord observé quel que soit le soleil. La mesure ne\n' +
+          '    sépare pas assez pour qu’on lise le chiffre en mètres comme une justesse.',
   );
 }
 
@@ -194,18 +196,16 @@ console.log(
   `  Champ du modèle inchangé par ce décalage : ${(100 * median(overlaps)).toFixed(0)} % des pixels` +
     ` — seuls ${(100 * (1 - median(overlaps))).toFixed(0)} % pouvaient donc changer d’avis.`,
 );
-console.log(
-  `  Effondrement rapporté à ce qui était possible : ${median(ratios).toFixed(2)}`,
-);
+console.log(`  Effondrement rapporté à ce qui était possible : ${median(ratios).toFixed(2)}`);
 console.log(
   median(ratios) > 0.8
     ? '\n    L’albédo d’une surface ne bouge pas quand le soleil bouge. Que la\n' +
-      '    corrélation chute d’autant que le champ d’ombres a réellement changé\n' +
-      '    établit que le modèle décrit bien des **ombres** — y compris là où son\n' +
-      '    accord absolu est faible. Les sites ouverts sont bruités, pas mal modélisés.'
+        '    corrélation chute d’autant que le champ d’ombres a réellement changé\n' +
+        '    établit que le modèle décrit bien des **ombres** — y compris là où son\n' +
+        '    accord absolu est faible. Les sites ouverts sont bruités, pas mal modélisés.'
     : '\n    La corrélation résiste plus que le champ d’ombres n’a bougé : une part\n' +
-      '    de l’accord ne dépend pas du soleil, donc tient aux surfaces. Reste à\n' +
-      '    savoir laquelle — ce test la mesure, il ne l’explique pas.',
+        '    de l’accord ne dépend pas du soleil, donc tient aux surfaces. Reste à\n' +
+        '    savoir laquelle — ce test la mesure, il ne l’explique pas.',
 );
 console.log('  ─────────────────────────────────────────────────────────\n');
 

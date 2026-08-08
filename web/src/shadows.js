@@ -231,7 +231,9 @@ export function createShadowLayer(map, canvas, describeBuildings) {
       if (building.maxX < west || building.minX > east) continue;
       if (building.maxY < north || building.minY > south) continue;
       const area =
-        (building.maxX - building.minX) * view.scale * ((building.maxY - building.minY) * view.scale);
+        (building.maxX - building.minX) *
+        view.scale *
+        ((building.maxY - building.minY) * view.scale);
       if (area < MIN_SCREEN_AREA) continue;
       candidates++;
       histogram[bucketOf(area)]++;

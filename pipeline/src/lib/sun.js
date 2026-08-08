@@ -22,9 +22,9 @@ export function sunPosition(date, lat, lon) {
   // Jours juliens depuis J2000.0
   const n = date.getTime() / 86400000 + 2440587.5 - 2451545.0;
 
-  const L = (280.460 + 0.9856474 * n) * D2R; // longitude moyenne
+  const L = (280.46 + 0.9856474 * n) * D2R; // longitude moyenne
   const g = (357.528 + 0.9856003 * n) * D2R; // anomalie moyenne
-  const lambda = L + (1.915 * Math.sin(g) + 0.020 * Math.sin(2 * g)) * D2R; // longitude écliptique
+  const lambda = L + (1.915 * Math.sin(g) + 0.02 * Math.sin(2 * g)) * D2R; // longitude écliptique
   const eps = (23.439 - 0.0000004 * n) * D2R; // obliquité
 
   const ra = Math.atan2(Math.cos(eps) * Math.sin(lambda), Math.cos(lambda));
@@ -33,11 +33,10 @@ export function sunPosition(date, lat, lon) {
   // Temps sidéral local
   const gmstHours = (18.697374558 + 24.06570982441908 * n) % 24;
   const lstDeg = gmstHours * 15 + lon;
-  const ha = (lstDeg * D2R) - ra; // angle horaire
+  const ha = lstDeg * D2R - ra; // angle horaire
 
   const latR = lat * D2R;
-  const sinAlt =
-    Math.sin(latR) * Math.sin(dec) + Math.cos(latR) * Math.cos(dec) * Math.cos(ha);
+  const sinAlt = Math.sin(latR) * Math.sin(dec) + Math.cos(latR) * Math.cos(dec) * Math.cos(ha);
   const altitude = Math.asin(Math.max(-1, Math.min(1, sinAlt)));
 
   const azimuth = Math.atan2(
@@ -183,7 +182,8 @@ export function clearSkyIlluminance(altitude, turbidity = DEFAULT_LINKE_TURBIDIT
   }
   const sinH = Math.max(Math.sin(altitude), 0.01);
   const m = airMass(altitude * R2D);
-  const directNormal = EXTRATERRESTRIAL_LUX * Math.exp(-0.8662 * turbidity * m * rayleighThickness(m));
+  const directNormal =
+    EXTRATERRESTRIAL_LUX * Math.exp(-0.8662 * turbidity * m * rayleighThickness(m));
 
   // Ce que le faisceau perd en traversant l'atmosphère, le ciel en rediffuse une
   // part. Le coefficient reste calé sur les mesures usuelles — 14 000 lux

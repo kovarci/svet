@@ -87,9 +87,13 @@ export function isStreetAxis(tags = {}) {
  *   déclarés **absents**, ou `null` si la rue ne dit rien.
  */
 export function declaredAbsent(tags = {}) {
-  const raw = String(tags.sidewalk ?? '').trim().toLowerCase();
+  const raw = String(tags.sidewalk ?? '')
+    .trim()
+    .toLowerCase();
   const prefixed = (side) => {
-    const value = String(tags[`sidewalk:${side}`] ?? '').trim().toLowerCase();
+    const value = String(tags[`sidewalk:${side}`] ?? '')
+      .trim()
+      .toLowerCase();
     return value === 'no' || value === 'none';
   };
 

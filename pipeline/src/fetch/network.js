@@ -59,7 +59,9 @@ export async function fetchNetwork(bbox, lampBbox) {
       lastError = new Error(`Réponse Overpass inattendue depuis ${endpoint}`);
     } catch (err) {
       lastError = err;
-      process.stdout.write(`  ⚠ ${new URL(endpoint).host} indisponible, on bascule sur un miroir\n`);
+      process.stdout.write(
+        `  ⚠ ${new URL(endpoint).host} indisponible, on bascule sur un miroir\n`,
+      );
     }
   }
   throw lastError;

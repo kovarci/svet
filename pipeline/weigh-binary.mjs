@@ -38,7 +38,9 @@ const parts = [
 const total = buffer.length;
 
 console.log(`\n▌ ${zone}.data.bin — ${(total / 1e6).toFixed(1)} Mo`);
-console.log(`  ${segmentCount} tronçons · ${stride} octets chacun · ${timeSteps} pas · ${horizonBins} secteurs\n`);
+console.log(
+  `  ${segmentCount} tronçons · ${stride} octets chacun · ${timeSteps} pas · ${horizonBins} secteurs\n`,
+);
 for (const [label, bytes] of parts.sort((a, b) => b[1] - a[1])) {
   const share = (100 * bytes) / total;
   console.log(
@@ -81,7 +83,10 @@ console.log(
 console.log('\n  Compression au transport (ce qu’un hébergeur fait tout seul) :');
 for (const [label, fn] of [
   ['gzip', () => gzipSync(buffer, { level: 6 })],
-  ['brotli (rapide)', () => brotliCompressSync(buffer, { params: { [constants.BROTLI_PARAM_QUALITY]: 5 } })],
+  [
+    'brotli (rapide)',
+    () => brotliCompressSync(buffer, { params: { [constants.BROTLI_PARAM_QUALITY]: 5 } }),
+  ],
 ]) {
   const t0 = performance.now();
   const out = fn();
