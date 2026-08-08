@@ -1,5 +1,7 @@
 # SVET
 
+[![CI](https://github.com/kovarci/svet/actions/workflows/ci.yml/badge.svg)](https://github.com/kovarci/svet/actions/workflows/ci.yml)
+
 Carte de l'exposition lumineuse de Paris, et calcul d'itinéraire, pour les
 personnes photosensibles.
 
