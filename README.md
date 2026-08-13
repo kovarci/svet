@@ -1,5 +1,14 @@
 # SVET
 
+![Le quartier du Louvre, coloré rue par rue de 8 h à 20 h, puis un itinéraire calculé deux fois](docs/demo.gif)
+
+*Chaque trottoir est coloré par son exposition, du bleu « abrité » au jaune
+« plein soleil », et se recolore d'heure en heure à mesure que les ombres
+tournent. Puis le même trajet est calculé deux fois : le plus rapide — 29 min,
+indice 38, 35 % au soleil — et le moins exposé — 34 min, indice 21, 10 % au
+soleil. Cinq minutes de plus, seize points d'exposition en moins. Rien n'est mis
+en scène : ce sont les chiffres que l'application affiche.*
+
 [![CI](https://github.com/kovarci/svet/actions/workflows/ci.yml/badge.svg)](https://github.com/kovarci/svet/actions/workflows/ci.yml)
 
 Carte de l'exposition lumineuse de Paris, et calcul d'itinéraire, pour les
@@ -661,6 +670,14 @@ coupe qu'une part de l'UV.
 L'indice tombait à zéro au coucher du soleil. Pour ce public, c'est faux au
 point d'être trompeur — et c'est même l'inverse qui est vrai : sur un œil adapté
 à l'obscurité, un luminaire à vingt mètres fait plus mal que le même à midi.
+
+![Bastille et la place des Vosges à 22 h, en lecture « Éclairage nocturne »](docs/nuit.png)
+
+*Place de la Bastille et place des Vosges à 22 h : les places et les grands
+boulevards ressortent, les rues intérieures du Marais restent bleues. Même
+échelle de couleur que le jour, et une carte qui n'a plus rien à voir — ici la
+lumière ne vient plus du ciel mais de 165 600 points connus un par un, flux et
+température de couleur compris.*
 
 La gêne nocturne n'est pas de même nature que la gêne diurne. De jour, c'est une
 nappe diffuse ; de nuit, une poignée de **sources ponctuelles vives dans un
