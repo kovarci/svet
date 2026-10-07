@@ -14,6 +14,6 @@
     "maplibre-gl": "^6.13.0"
   },
   "devDependencies": {
-    "vite": "^6.0.7"
+    "vite": "^8.3.3"
   }
 }
