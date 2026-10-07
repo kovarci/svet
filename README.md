@@ -82,6 +82,23 @@ Le premier défaut trouvé par ces tests était réel — un lien sans priorité
 poussait le curseur sur « le plus rapide » à chaque ouverture, ce qui vidait
 l'application de son objet.
 
+Les modules éprouvés un par un ne voient pas leur assemblage. `main.js`
+passait à la voix un objet sans libellé : une exception à chaque position GPS,
+plus de distance affichée, plus d'alerte de soleil — et aucun test de module ne
+pouvait le voir. Les **parcours de bout en bout** marchent donc pour de vrai :
+
+```bash
+npm run test:e2e
+```
+
+Une zone synthétique écrite par les écrivains du pipeline, Chromium, un GPS
+posé point par point, la voix et le vibreur enregistrés. Ils vérifient que la
+carte se peint, qu'une marche guidée annonce chaque palier et se tait à
+l'arrêt, qu'un recalcul reprend le guidage, qu'un changement de zone en cours
+de chargement installe la bonne, et qu'un onglet rechargé hors réseau se
+rouvre. Ceux-là demandent un navigateur : `npx playwright install chromium` la
+première fois.
+
 Deux autres commandes, du même ordre :
 
 ```bash

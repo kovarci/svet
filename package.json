@@ -22,7 +22,8 @@
     "test": "npm run test --workspace pipeline && npm run test --workspace web",
     "lint": "eslint .",
     "format": "prettier --write .",
-    "format:check": "prettier --check ."
+    "format:check": "prettier --check .",
+    "test:e2e": "npm run test:e2e --workspace web"
   },
   "devDependencies": {
     "@eslint/js": "^10.0.1",

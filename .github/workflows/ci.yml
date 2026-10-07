@@ -34,8 +34,11 @@ jobs:
 
       # `npm ci` et non `npm install` : on installe ce que le verrou décrit,
       # sans le mettre à jour au passage. Un test qui passe ici doit passer sur
-      # la machine de développement, avec les mêmes versions.
+      # la machine de développement, avec les mêmes versions. Le navigateur des
+      # tests de bout en bout n'a rien à faire ici : il a son propre travail.
       - run: npm ci
+        env:
+          PLAYWRIGHT_SKIP_BROWSER_DOWNLOAD: 1
 
       - run: npm run lint
 
@@ -46,3 +49,26 @@ jobs:
       # La construction charge tous les modules ensemble : c'est le seul
       # contrôle qui attrape un import cassé ou un fichier oublié.
       - run: npm run build
+
+  # L'application entière dans Chromium : carte, itinéraire, marche guidée au
+  # GPS simulé, changement de zone, rechargement hors réseau. C'est ce qui
+  # aurait vu le guidage s'interrompre à chaque position — aucun test de module
+  # ne le pouvait, le défaut était dans l'assemblage.
+  parcours:
+    runs-on: ubuntu-latest
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: npm
+
+      - run: npm ci
+        env:
+          PLAYWRIGHT_SKIP_BROWSER_DOWNLOAD: 1
+
+      - run: npm exec --workspace web -- playwright install --with-deps chromium
+
+      - run: npm run test:e2e

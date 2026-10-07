@@ -72,5 +72,12 @@ export default [
     languageOptions: { globals: { ...globals.node } },
   },
 
+  // Les tests de bout en bout tournent sous Node, mais une partie de leur code
+  // s'exécute dans la page : les fonctions passées à `page.evaluate`.
+  {
+    files: ['web/e2e/**/*.js', 'web/e2e/**/*.mjs'],
+    languageOptions: { globals: { ...globals.node, ...globals.browser } },
+  },
+
   prettier,
 ];

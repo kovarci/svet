@@ -7,13 +7,15 @@
     "dev": "vite",
     "build": "vite build",
     "preview": "vite preview",
-    "test": "node --test \"test/*.test.js\""
+    "test": "node --test \"test/*.test.js\"",
+    "test:e2e": "node --test --test-concurrency=1 \"e2e/*.e2e.js\""
   },
   "dependencies": {
     "@svet/pipeline": "*",
     "maplibre-gl": "^6.13.0"
   },
   "devDependencies": {
+    "playwright": "1.56.1",
     "vite": "^8.3.3"
   }
 }
