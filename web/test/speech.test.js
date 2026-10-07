@@ -109,6 +109,11 @@ test('la phrase ne dépend que de l’instruction', () => {
   );
   assert.equal(phraseFor({ type: 'depart', name: 'Rue X', side: 'sud' }, 0), 'Départ.');
   assert.equal(phraseFor({ type: 'arrive', name: null, side: null }, 3), 'Vous êtes arrivé.');
+  // Annoncée de loin, l'arrivée se dit au futur proche, pas au passé.
+  assert.equal(
+    phraseFor({ type: 'arrive', name: null, side: null }, 150),
+    'Dans 150 mètres, arrivée à destination.',
+  );
 
   for (const type of ['straight', 'slight_left', 'right', 'sharp_right', 'crossing']) {
     for (const remaining of [5, 40, 400, 1500]) {

@@ -181,8 +181,19 @@ function turnType(delta) {
   return delta > 0 ? 'sharp_right' : 'sharp_left';
 }
 
-/** Libellé et flèche d'une manœuvre. */
-export function describeManoeuvre(instruction) {
+/**
+ * En deçà, on est arrivé ; au-delà, l'arrivée est encore devant soi. Vingt
+ * mètres, c'est aussi la distance sous laquelle la voix cesse de la dire.
+ */
+export const ARRIVED_METERS = 20;
+
+/**
+ * Libellé et flèche d'une manœuvre.
+ *
+ * @param {number} [remaining] distance jusqu'à la manœuvre : seule l'arrivée en
+ *   dépend, qu'on ne déclare pas atteinte six cents mètres avant.
+ */
+export function describeManoeuvre(instruction, remaining = 0) {
   const labels = {
     depart: ['Départ', '↑'],
     straight: ['Continuez', '↑'],
@@ -195,7 +206,8 @@ export function describeManoeuvre(instruction) {
     crossing: ['Traversez', '⇅'],
     arrive: ['Vous êtes arrivé', '◎'],
   };
-  const [label, arrow] = labels[instruction.type] ?? labels.straight;
+  const [fixed, arrow] = labels[instruction.type] ?? labels.straight;
+  const label = instruction.type === 'arrive' && remaining > ARRIVED_METERS ? 'Arrivée' : fixed;
 
   let text = label;
   if (instruction.name && instruction.type !== 'arrive') {

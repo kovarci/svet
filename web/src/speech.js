@@ -11,7 +11,7 @@
  * vocale exige un premier geste de l'utilisateur — d'où `unlock()`.
  */
 
-import { describeManoeuvre } from './navigation.js';
+import { ARRIVED_METERS, describeManoeuvre } from './navigation.js';
 
 /** Distances auxquelles une manœuvre est annoncée, en mètres. */
 const ANNOUNCE_AT = [180, 60, 18];
@@ -116,9 +116,13 @@ export function createVoice() {
  * coup. C'est la seule règle qui compte pour un guidage écouté sans regarder.
  */
 export function phraseFor(instruction, remaining) {
-  // Le départ et l'arrivée n'ont pas de distance : « dans deux cents mètres,
-  // départ » ne veut rien dire.
-  if (instruction.type === 'arrive') return 'Vous êtes arrivé.';
+  // Le départ n'a pas de distance : « dans deux cents mètres, départ » ne veut
+  // rien dire. L'arrivée en a une tant qu'on ne l'a pas atteinte.
+  if (instruction.type === 'arrive') {
+    return remaining <= ARRIVED_METERS
+      ? 'Vous êtes arrivé.'
+      : `Dans ${roundDistance(remaining)}, arrivée à destination.`;
+  }
   if (instruction.type === 'depart') return 'Départ.';
 
   // Libellé, rue et trottoir sont tirés de l'instruction ici même. Les

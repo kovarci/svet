@@ -2259,7 +2259,7 @@ function onPositionError(error) {
 function renderNavigation(fix, accuracy) {
   const { instructions } = state.nav;
   const { instruction, remaining } = nextManoeuvre(instructions, fix.distanceAlong);
-  const { text, arrow, side } = describeManoeuvre(instruction);
+  const { text, arrow, side } = describeManoeuvre(instruction, remaining);
 
   dom.nav.classList.toggle('is-off-route', state.nav.offRoute);
   if (!state.nav.offRoute) state.nav.warnedOffRoute = false;

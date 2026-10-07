@@ -219,6 +219,14 @@ test('le libellé d’une manœuvre porte la rue, sauf à l’arrivée', () => {
   assert.equal(describeManoeuvre({ type: 'arrive', name: 'Rue X' }).text, 'Vous êtes arrivé');
 });
 
+test('on n’est arrivé qu’à l’arrivée', () => {
+  // La dernière consigne est l'arrivée : sur une dernière ligne droite de six
+  // cents mètres, le bandeau affichait « Vous êtes arrivé » d'un bout à
+  // l'autre, à côté de la distance qui restait à parcourir.
+  assert.equal(describeManoeuvre({ type: 'arrive', name: null }, 680).text, 'Arrivée');
+  assert.equal(describeManoeuvre({ type: 'arrive', name: null }, 12).text, 'Vous êtes arrivé');
+});
+
 test('la distance plane vaut la distance réelle à quelques mètres près', () => {
   // Un degré de latitude fait 111,1 km ; on vérifie qu'on ne s'est pas trompé
   // d'ordre de grandeur, ce qui fausserait toutes les annonces.
