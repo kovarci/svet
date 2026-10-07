@@ -11,7 +11,7 @@ import {
   MAX_SEGMENTS_PER_CELL,
 } from './region.js';
 import { createProjection, padBbox } from './lib/geo.js';
-import { localToUTC, sunPosition, applyRefraction, DEG } from './lib/sun.js';
+import { localDate, localToUTC, sunPosition, applyRefraction, DEG } from './lib/sun.js';
 import { fetchBuildings, buildingHeight } from './fetch/buildings.js';
 import { fetchVegetation } from './fetch/vegetation.js';
 import { fetchTrees } from './fetch/trees.js';
@@ -1265,7 +1265,7 @@ function parseArgs(argv) {
       const value = arg.slice(7);
       // `--date=today` permet de planifier une régénération quotidienne sans
       // réécrire la date dans la commande.
-      out.date = value === 'today' ? new Date().toISOString().slice(0, 10) : value;
+      out.date = value === 'today' ? localDate() : value;
     } else if (arg.startsWith('--step=')) out.stepMinutes = Number(arg.slice(7));
   }
   return out;

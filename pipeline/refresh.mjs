@@ -30,6 +30,7 @@ import { spawn } from 'node:child_process';
 import { readFileSync } from 'node:fs';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
+import { localDate } from './src/lib/sun.js';
 
 const HERE = path.dirname(fileURLToPath(import.meta.url));
 const INDEX = path.resolve(HERE, '../web/public/data/zones.json');
@@ -57,7 +58,7 @@ if (zones.length === 0) {
   process.exit(1);
 }
 
-const today = new Date().toISOString().slice(0, 10);
+const today = localDate();
 console.log(`\n▌ Rafraîchissement SVET — ${today}`);
 console.log(`  ${zones.length} zone(s) : ${zones.join(', ')}\n`);
 

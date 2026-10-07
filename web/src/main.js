@@ -58,7 +58,14 @@ import {
   uvLabel,
   wetnessFromRain,
 } from '@svet/pipeline/model';
-import { applyRefraction, localToUTC, sunPosition, DEG } from '@svet/pipeline/sun';
+import {
+  applyRefraction,
+  localDate,
+  localMinutes,
+  localToUTC,
+  sunPosition,
+  DEG,
+} from '@svet/pipeline/sun';
 
 const BASEMAP = 'https://basemaps.cartocdn.com/gl/dark-matter-gl-style/style.json';
 
@@ -717,7 +724,7 @@ async function loadForecast(meta) {
     // peut dater de la veille, et proposer par défaut la météo d'hier n'a aucun
     // sens pour quelqu'un qui prépare une sortie. La géométrie des ombres, elle,
     // reste celle du calcul — c'est ce qui borne l'horizon à trois jours.
-    const today = new Date().toISOString().slice(0, 10);
+    const today = localDate();
     state.forecast = await fetchForecast({
       center: meta.center,
       date: meta.date > today ? meta.date : today,
@@ -751,7 +758,7 @@ function renderDayChoices() {
     return;
   }
 
-  const today = new Date().toISOString().slice(0, 10);
+  const today = localDate();
   const label = (iso) => {
     const days = Math.round((Date.parse(iso) - Date.parse(today)) / 86400000);
     if (days === 0) return "aujourd'hui";
@@ -1458,7 +1465,7 @@ function renderDatasetDate(meta) {
     month: 'long',
     year: 'numeric',
   });
-  const today = new Date().toISOString().slice(0, 10);
+  const today = localDate();
   const days = Math.round((Date.parse(today) - Date.parse(meta.date)) / 86400000);
 
   // « Paris » était écrit en dur : c'était vrai tant que toutes les zones
@@ -2175,8 +2182,10 @@ function stopNavigation() {
 function followRealClock() {
   const sync = () => {
     if (!state.nav) return;
-    const now = new Date();
-    const minutes = now.getHours() * 60 + now.getMinutes() + now.getSeconds() / 60;
+    // L'heure de Paris, pas celle du téléphone : la simulation est en heure de
+    // Paris, et un téléphone resté à l'heure d'un autre fuseau guiderait avec
+    // les ombres d'une autre heure.
+    const minutes = localMinutes();
     const min = Number(dom.time.min);
     const max = Number(dom.time.max);
     state.minutes = Math.max(min, Math.min(max, minutes));

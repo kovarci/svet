@@ -89,6 +89,28 @@ export function timeZoneOffsetMinutes(date, timeZone = 'Europe/Paris') {
 }
 
 /**
+ * Date civile d'un instant dans le fuseau donné, au format AAAA-MM-JJ.
+ *
+ * `toISOString().slice(0, 10)` donne la date **universelle** : de minuit à une
+ * ou deux heures du matin à Paris, c'est encore la veille.
+ */
+export function localDate(date = new Date(), timeZone = 'Europe/Paris') {
+  return shifted(date, timeZone).toISOString().slice(0, 10);
+}
+
+/** Heure civile d'un instant dans le fuseau donné, en minutes depuis minuit. */
+export function localMinutes(date = new Date(), timeZone = 'Europe/Paris') {
+  const local = shifted(date, timeZone);
+  return local.getUTCHours() * 60 + local.getUTCMinutes() + local.getUTCSeconds() / 60;
+}
+
+/** L'instant décalé de l'écart du fuseau : ses champs UTC sont l'heure locale. */
+function shifted(date, timeZone) {
+  // Arrondi : `timeZoneOffsetMinutes` ignore les millisecondes de l'instant.
+  return new Date(date.getTime() + Math.round(timeZoneOffsetMinutes(date, timeZone)) * 60000);
+}
+
+/**
  * Convertit une heure locale (« 2026-07-31 », 14, 30) en instant UTC.
  * Résout l'offset par itération : nécessaire car l'offset dépend de l'instant.
  */

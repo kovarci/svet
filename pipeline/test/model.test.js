@@ -22,6 +22,8 @@ import {
   sunPosition,
   applyRefraction,
   localToUTC,
+  localDate,
+  localMinutes,
   airMass,
   clearSkyIlluminance,
   linkeFromBeam,
@@ -119,6 +121,24 @@ test('le soleil tourne dans le bon sens', () => {
   assert.ok(azimuthAt(8) < azimuthAt(12), 'le matin, le soleil va vers le sud');
   assert.ok(azimuthAt(12) < azimuthAt(18), 'l’après-midi, il va vers l’ouest');
   assert.ok(azimuthAt(8) > 45 && azimuthAt(8) < 120, `azimut à 8 h : ${azimuthAt(8).toFixed(0)}°`);
+});
+
+test('la date du jour est celle de Paris, pas celle de Greenwich', () => {
+  // Une heure et demie du matin à Paris, le 8 octobre : encore le 7 en temps
+  // universel. `toISOString` donnait donc la météo de la veille, étiquetée
+  // « aujourd'hui », aux heures mêmes où l'on prépare un trajet de nuit.
+  const night = new Date('2026-10-07T23:30:00Z');
+  assert.equal(night.toISOString().slice(0, 10), '2026-10-07');
+  assert.equal(localDate(night), '2026-10-08');
+  assert.equal(localMinutes(night), 90);
+
+  // Heure d'hiver : une heure d'écart seulement, et un changement d'année.
+  const newYear = new Date('2026-12-31T23:30:00Z');
+  assert.equal(localDate(newYear), '2027-01-01');
+  assert.equal(localMinutes(newYear), 30);
+
+  // En journée, les deux coïncident.
+  assert.equal(localDate(new Date('2026-10-07T12:00:00Z')), '2026-10-07');
 });
 
 // ───────────────────────────────────────────── invariants de l’indice ─────
