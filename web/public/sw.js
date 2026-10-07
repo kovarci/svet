@@ -46,12 +46,34 @@ self.addEventListener('activate', (event) => {
       .keys()
       .then((keys) =>
         Promise.all(
-          keys.filter((key) => !key.startsWith(VERSION)).map((key) => caches.delete(key)),
+          keys.map((key) => (key.startsWith(VERSION) ? keepLatest(key) : caches.delete(key))),
         ),
       )
       .then(() => self.clients.claim()),
   );
 });
+
+/**
+ * Ne garde, de chaque fichier, que la copie la plus récente.
+ *
+ * Les versions précédentes de ce service worker gardaient toutes les copies :
+ * une par recalcul du pipeline, soit plusieurs mégaoctets par jour et par zone
+ * consultée. Changer le nom des caches les aurait purgées d'un coup — avec les
+ * secteurs préparés pour le hors-ligne, sans prévenir personne. On trie donc
+ * plutôt qu'on ne vide : `keys()` rend les entrées dans l'ordre où elles ont
+ * été rangées, la dernière de chaque chemin est la bonne.
+ */
+async function keepLatest(cacheName) {
+  const cache = await caches.open(cacheName);
+  const latest = new Map();
+  const stale = [];
+  for (const request of await cache.keys()) {
+    const path = pathOf(request);
+    if (latest.has(path)) stale.push(latest.get(path));
+    latest.set(path, request);
+  }
+  await Promise.all(stale.map((request) => cache.delete(request)));
+}
 
 self.addEventListener('fetch', (event) => {
   const { request } = event;
@@ -118,7 +140,7 @@ async function prefetch(urls, port) {
           const response = await fetch(url);
           // Un 404 est une réponse normale ici : la pyramide a de vrais trous,
           // et une tuile absente n'est pas un échec de préparation.
-          if (response.ok) await cache.put(url, response.clone());
+          if (response.ok) await putLatest(cache, url, response.clone());
           else if (response.status !== 404) failed++;
         }
       } catch {
@@ -150,8 +172,7 @@ async function cacheFirst(request, cacheName, limit = 0) {
     // On ne met en cache que les réponses complètes : une réponse partielle
     // (206) ou opaque resservie plus tard donnerait une carte tronquée.
     if (response.ok && response.status === 200) {
-      cache.put(request, response.clone());
-      if (limit) trim(cache, limit);
+      putLatest(cache, request, response.clone()).then(() => limit && trim(cache, limit));
     }
     return response;
   } catch (error) {
@@ -173,7 +194,7 @@ async function networkFirst(request, cacheName) {
   const cache = await caches.open(cacheName);
   try {
     const response = await fetch(request);
-    if (response.ok) cache.put(request, response.clone());
+    if (response.ok) putLatest(cache, request, response.clone());
     return response;
   } catch (error) {
     const hit = await cache.match(request, { ignoreSearch: true });
@@ -182,16 +203,46 @@ async function networkFirst(request, cacheName) {
   }
 }
 
+/**
+ * Cache d'abord, rafraîchi en fond : pour la coquille de l'application.
+ *
+ * Le repli hors ligne ignore la chaîne de requête. L'adresse de la page porte
+ * la zone et l'itinéraire (`?de=…&a=…&nav=1`), et une adresse jamais servie
+ * telle quelle n'était trouvée nulle part : un onglet rechargé hors réseau —
+ * ce que fait un navigateur mobile avec un onglet mis en veille, en pleine
+ * marche — n'affichait plus que la page d'erreur du navigateur. La coquille est
+ * la même quels que soient les paramètres ; c'est le script qui les lit.
+ */
 async function staleWhileRevalidate(request, cacheName) {
   const cache = await caches.open(cacheName);
   const hit = await cache.match(request);
   const network = fetch(request)
     .then((response) => {
-      if (response.ok) cache.put(request, response.clone());
+      if (response.ok) putLatest(cache, request, response.clone());
       return response;
     })
-    .catch(() => hit);
+    .catch(async () => hit ?? (await cache.match(request, { ignoreSearch: true })));
   return hit ?? network;
+}
+
+/**
+ * Range une réponse à la place de toutes les autres copies du même fichier.
+ *
+ * Les données portent leur version dans la requête (`?v=…`, `?t=…`) : chaque
+ * recalcul du pipeline produit donc une adresse neuve. Rangées côte à côte,
+ * les copies s'accumulaient sans fin, et le repli hors ligne — qui ignore la
+ * requête — rendait la **plus ancienne**.
+ */
+async function putLatest(cache, request, response) {
+  const copies = await cache.keys(request, { ignoreSearch: true });
+  const url = typeof request === 'string' ? new URL(request, self.location.href).href : request.url;
+  await Promise.all(copies.filter((old) => old.url !== url).map((old) => cache.delete(old)));
+  await cache.put(request, response);
+}
+
+function pathOf(request) {
+  const url = new URL(request.url);
+  return url.origin + url.pathname;
 }
 
 /** Éviction en file : les entrées les plus anciennes partent d'abord. */
