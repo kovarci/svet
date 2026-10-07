@@ -1,3 +1,20 @@
+/**
+ * Point d'entrée de l'interface : le démarrage, le chargement d'une zone ou
+ * d'une région, et le câblage des commandes.
+ *
+ * Le reste vit dans des modules qui partagent l'état par `app.js` :
+ *
+ *  - `layers.js` — sources, couches, peinture des trottoirs, lumière, bâti ;
+ *  - `panel.js` — panneau de détail, légende, couleurs de l'échelle ;
+ *  - `search.js` — départ et arrivée : recherche, pointage, position réelle ;
+ *  - `route.js` — itinéraire, « quand partir ? », lien partageable ;
+ *  - `guidance.js` — guidage pas à pas, voix, verrou d'écran ;
+ *  - `offline-ui.js` — panneau hors ligne.
+ *
+ * Ici reste ce qui ordonne les autres : l'enchaînement du démarrage, le jeton
+ * qui écarte un chargement dépassé (`loadToken`), et `bindControls`, où chaque
+ * commande est reliée à son effet. Aucun module n'importe celui-ci.
+ */
 import * as maplibregl from 'maplibre-gl';
 import 'maplibre-gl/dist/maplibre-gl.css';
 import maplibreWorkerUrl from 'maplibre-gl/dist/maplibre-gl-worker.mjs?worker&url';

@@ -1771,7 +1771,18 @@ pipeline/
 
 web/
   src/
-    main.js            carte, curseur temporel, panneau de détail
+    main.js            démarrage, chargement des zones, câblage des commandes
+    app.js             état partagé : DOM, état, carte, évaluateur
+    layers.js          couches de la carte, peinture des trottoirs, lumière, bâti
+    panel.js           panneau de détail, légende, couleurs de l'échelle
+    search.js          départ et arrivée : recherche, pointage, position réelle
+    route.js           itinéraire, « quand partir ? », lien partageable
+    guidance.js        guidage pas à pas, voix, verrou d'écran
+    offline-ui.js      panneau hors ligne
+    evaluation.js      exposition d'un trottoir à une minute donnée
+    format.js          mise en forme, écriture prudente dans le DOM
+    prefs.js           réglages retenus d'une visite à l'autre
+    contrast.js        couleurs de l'échelle rendues lisibles comme texte
     binary.js          lecture du fichier de zone, par vues typées
     cells.js           chargement d'une région par cellules, couture des graphes
     routing.js         graphe piéton, A* pondéré, passages brutaux
@@ -1783,7 +1794,7 @@ web/
     weather.js         prévision Open-Meteo (nébulosité, UV, flux mesurés)
     speech.js          annonces vocales et vibrations
     style.css
-  test/                itinéraire, guidage, cellules, liens, hors-ligne
+  test/                itinéraire, guidage, évaluation, cellules, liens, hors-ligne
   public/sw.js         service worker — hors ligne et préparation d'un secteur
   public/data/         sortie du pipeline (non versionné)
 ```
