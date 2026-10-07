@@ -23,7 +23,7 @@
     "validate:all": "node validate-campaign.mjs"
   },
   "dependencies": {
-    "geojson-vt": "^4.0.3",
+    "geojson-vt": "^5.0.4",
     "pngjs": "^7.0.0",
     "vt-pbf": "^3.1.3"
   },

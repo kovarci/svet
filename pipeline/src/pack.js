@@ -1,6 +1,6 @@
 import { mkdir, rm, writeFile } from 'node:fs/promises';
 import path from 'node:path';
-import geojsonvt from 'geojson-vt';
+import GeoJSONVT from 'geojson-vt';
 import vtpbf from 'vt-pbf';
 import { CARDINALS, HIGHWAYS } from './model.js';
 import { tileOf } from './lib/tiles.js';
@@ -100,11 +100,11 @@ export async function writeTiles(dir, network, buildings, bbox, { clear = true, 
     generateId: false,
   };
   const layers = {
-    reseau: geojsonvt(reseau, options),
+    reseau: new GeoJSONVT(reseau, options),
     // Le bâti sert aux ombres portées, dessinées dans le navigateur. Une marge
     // plus large que pour le réseau : un immeuble hors écran projette son ombre
     // dans le champ.
-    bati: geojsonvt(buildings, { ...options, buffer: 256, tolerance: 2 }),
+    bati: new GeoJSONVT(buildings, { ...options, buffer: 256, tolerance: 2 }),
   };
 
   const [west, south, east, north] = bbox;

@@ -3,7 +3,7 @@ import { mkdir, readdir, readFile, stat, unlink, writeFile } from 'node:fs/promi
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 
-import geojsonvt from 'geojson-vt';
+import GeoJSONVT from 'geojson-vt';
 import vtpbf from 'vt-pbf';
 
 import { CONFIG } from './src/config.js';
@@ -332,7 +332,7 @@ async function writeOverview(outDir, cellDir, cells, region) {
   }
   console.log(`  ${features.length.toLocaleString('fr-FR')} tronçons structurants`);
 
-  const index = geojsonvt(
+  const index = new GeoJSONVT(
     { type: 'FeatureCollection', features },
     { maxZoom: CELL_ZOOM - 1, indexMaxZoom: CELL_ZOOM - 1, tolerance: 5, extent: 4096, buffer: 64 },
   );
