@@ -513,12 +513,17 @@ function registerServiceWorker() {
 // --------------------------------------------------------------- chargement
 
 async function loadZone(key) {
+  // Numéroté dès l'entrée : un chargement que l'on a dépassé en changeant de
+  // zone s'arrête à son prochain réveil. Sans cela, Paris — trente-quatre
+  // mégaoctets — finissait d'arriver après la zone choisie ensuite, et
+  // s'installait à sa place sous un sélecteur qui affichait l'autre.
+  const token = ++loadToken;
   dom.loading.classList.remove('is-hidden');
   dom.loading.classList.remove('is-error');
   dom.loading.textContent = 'Chargement des données…';
 
   const entry = state.zones.find((z) => z.key === key);
-  if (entry?.kind === 'region') return loadRegion(entry);
+  if (entry?.kind === 'region') return loadRegion(entry, token);
 
   // L'horodatage du calcul en paramètre d'URL : c'est lui qui fait qu'une
   // reconstruction du pipeline invalide le cache hors ligne, plutôt que de
@@ -526,13 +531,13 @@ async function loadZone(key) {
   const stamp = state.zones.find((z) => z.key === key)?.stamp ?? '';
   const version = stamp ? `?v=${stamp}` : '';
   lastProgress = -1;
-  const token = ++loadToken;
   const [meta, data] = await Promise.all([
     loadJSON(`data/${key}.meta.json${version}`),
     loadZoneData(`data/${key}.data.bin${version}`, (received, total) =>
       reportProgress(token, received, total),
     ),
   ]);
+  if (token !== loadToken) return;
   state.zoneKey = key;
   state.version = version;
 
@@ -569,6 +574,7 @@ async function loadZone(key) {
   // purge du même coup les états d'entités de la précédente.
   if (map.getSource('network')) removeNetworkLayers();
   await addLayers();
+  if (token !== loadToken) return;
   map.getSource('route')?.setData(emptyCollection());
   map.getSource('markers')?.setData(emptyCollection());
   map.getSource('me')?.setData(emptyCollection());
@@ -595,9 +601,10 @@ async function loadZone(key) {
  * rien — et le dire, plutôt que d'afficher la couleur du zéro, qui voudrait
  * dire « aucune gêne ».
  */
-async function loadRegion(entry) {
+async function loadRegion(entry, token) {
   const version = entry.stamp ? `?v=${entry.stamp}` : '';
   const index = await loadRegionIndex(`data/${entry.region}/index.json${version}`);
+  if (token !== loadToken) return;
 
   state.zoneKey = entry.key;
   state.version = version;
@@ -643,6 +650,7 @@ async function loadRegion(entry) {
 
   if (map.getSource('network')) removeNetworkLayers();
   await addLayers();
+  if (token !== loadToken) return;
   map.getSource('route')?.setData(emptyCollection());
   map.getSource('markers')?.setData(emptyCollection());
   map.getSource('me')?.setData(emptyCollection());
@@ -650,6 +658,7 @@ async function loadRegion(entry) {
 
   dom.loading.textContent = 'Chargement des relevés du secteur…';
   await ensureVisibleCells();
+  if (token !== loadToken) return;
 
   applyTime();
   dom.loading.classList.add('is-hidden');
