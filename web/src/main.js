@@ -1,6 +1,15 @@
-import maplibregl from 'maplibre-gl';
+import * as maplibregl from 'maplibre-gl';
 import 'maplibre-gl/dist/maplibre-gl.css';
+import maplibreWorkerUrl from 'maplibre-gl/dist/maplibre-gl-worker.mjs?worker&url';
 import './style.css';
+
+// MapLibre 6 déduit l'adresse de son worker de la sienne propre. Passé par
+// Vite, il n'a plus d'adresse propre — il est fondu dans notre paquet — et
+// cherche son worker à côté d'un fichier qui ne l'a pas : aucune tuile ne se
+// charge, en développement comme en production, et les tests n'en voient rien
+// puisqu'ils ne lancent pas de carte. On donne donc l'adresse du worker tel
+// que Vite l'a construit.
+maplibregl.setWorkerUrl(maplibreWorkerUrl);
 
 import { createShadowLayer } from './shadows.js';
 import { CLEAR_SKY, fetchForecast, skyLabel } from './weather.js';

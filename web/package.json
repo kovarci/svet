@@ -11,7 +11,7 @@
   },
   "dependencies": {
     "@svet/pipeline": "*",
-    "maplibre-gl": "^5.6.0"
+    "maplibre-gl": "^6.13.0"
   },
   "devDependencies": {
     "vite": "^6.0.7"
