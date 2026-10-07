@@ -2073,8 +2073,15 @@ function renderDepartures(box, results) {
           ? `En partant à <strong>${formatClock(best.minutes)}</strong> plutôt que maintenant,
              le même trajet passe de ${Math.round(current.index)} à
              <strong>${Math.round(best.index)}</strong> — ${gain} points de moins.`
-          : `Attendre ne change presque rien sur les trois prochaines heures :
-             l’écart reste sous ${Math.max(1, gain)} point.`
+          : // L'exploration s'arrête à la fin de la journée calculée : on dit
+            // jusqu'où l'on a regardé, plutôt que « trois heures » en fin
+            // d'après-midi. Et l'écart arrondi à 1 ou 2 n'est pas « sous 1 ».
+            `Attendre jusqu’à ${formatClock(results.at(-1).minutes)} ne change presque rien :
+             l’écart ${
+               gain === 0
+                 ? 'reste sous un point'
+                 : `ne dépasse pas ${gain === 1 ? 'un point' : `${gain} points`}`
+             }.`
       }</p>
     </div>`;
 
@@ -3072,8 +3079,18 @@ function bindControls() {
       lat: state.nav.lastFix[1],
     });
     stopNavigation();
-    setRoutePanel(true);
-    computeRoute().catch(fail);
+    // Le guidage reprend de lui-même sur le nouveau trajet : celui qui a
+    // demandé le recalcul est en train de marcher, et chercher « Démarrer le
+    // guidage » dans un panneau, en plein soleil, est exactement ce qu'on veut
+    // lui éviter. Le panneau ne s'ouvre que si le calcul échoue, pour dire
+    // pourquoi — et l'ancien trajet, resté dans l'état, n'est pas relancé.
+    const previous = state.route;
+    computeRoute()
+      .then(() => {
+        if (state.route && state.route !== previous) startNavigation();
+        else setRoutePanel(true);
+      })
+      .catch(fail);
   });
 
   dom.navFollow.addEventListener('click', () => {
