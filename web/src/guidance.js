@@ -13,7 +13,6 @@
 import { dom, evaluateSegment, map, motionDuration, state } from './app.js';
 import { emptyCollection, formatMeters, haversineMeters, setHTML, setText } from './format.js';
 import { applyTime } from './layers.js';
-import { rememberRouteInUrl } from './main.js';
 import {
   OFF_ROUTE_METERS,
   advanceProgress,
@@ -24,6 +23,7 @@ import {
   snapToRoute,
 } from './navigation.js';
 import { colorFor } from './panel.js';
+import { rememberRouteInUrl } from './route.js';
 import { transitions } from './routing.js';
 import { geolocationMessage } from './search.js';
 import { createVoice, phraseFor } from './speech.js';
