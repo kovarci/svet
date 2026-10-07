@@ -2278,7 +2278,7 @@ function renderNavigation(fix, accuracy) {
   setText(dom.navInstruction, text);
   setText(dom.navSide, side ? `Trottoir ${side}` : '');
 
-  voice.announce(instruction, remaining, phraseFor(instruction, remaining, { text, side }));
+  voice.announce(instruction, remaining, phraseFor(instruction, remaining));
   setText(dom.navDistance, remaining < 15 ? 'maintenant' : formatMeters(remaining));
   warnTransition(fix.distanceAlong);
 

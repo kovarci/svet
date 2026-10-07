@@ -69,6 +69,7 @@ l'écran, c'est-à-dire où l'on a le moins de moyens de vérifier. Ce qui est
 |---|---|
 | `routing.js` | la pondération qui ne change plus rien, l'heure de passage qui n'avance pas, un réseau exposé qui devient infranchissable |
 | `navigation.js` | le recalage qui saute sur le brin d'en face, le bruit GPS qui fait reculer la progression, le trottoir qui alterne à chaque tronçon |
+| `speech.js` | l'annonce qui ne vient jamais : un virage dit à 200 m, puis plus rien jusqu'au carrefour |
 | `cells.js` | la couture des graphes régionaux, sans laquelle le réseau est coupé à chaque bord de cellule |
 | `link.js` | un lien d'itinéraire qui ne rend pas ce qu'on y a mis |
 | `offline.js` | un pavage décalé, et l'on prépare le quartier d'à côté |

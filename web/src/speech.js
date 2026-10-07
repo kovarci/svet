@@ -11,6 +11,8 @@
  * vocale exige un premier geste de l'utilisateur — d'où `unlock()`.
  */
 
+import { describeManoeuvre } from './navigation.js';
+
 /** Distances auxquelles une manœuvre est annoncée, en mètres. */
 const ANNOUNCE_AT = [180, 60, 18];
 
@@ -68,7 +70,10 @@ export function createVoice() {
    * rafraîchie chaque seconde répéterait la même phrase indéfiniment.
    */
   function announce(instruction, remaining, phrase) {
-    const step = ANNOUNCE_AT.find((threshold) => remaining <= threshold);
+    // Le palier le plus proche qu'on a franchi, donc le **dernier** de la liste
+    // décroissante qui convienne. Le premier serait toujours 180 m — déjà dit —
+    // et l'on n'entendait jamais « dans 60 mètres » ni « tournez ».
+    const step = ANNOUNCE_AT.findLast((threshold) => remaining <= threshold);
     if (step === undefined) return false;
 
     const key = `${instruction.index}:${step}`;
@@ -108,11 +113,17 @@ export function createVoice() {
  * droite » — parce qu'on ne peut pas anticiper un ordre qu'on entend après
  * coup. C'est la seule règle qui compte pour un guidage écouté sans regarder.
  */
-export function phraseFor(instruction, remaining, { label, name, side }) {
+export function phraseFor(instruction, remaining) {
   // Le départ et l'arrivée n'ont pas de distance : « dans deux cents mètres,
   // départ » ne veut rien dire.
   if (instruction.type === 'arrive') return 'Vous êtes arrivé.';
   if (instruction.type === 'depart') return 'Départ.';
+
+  // Libellé, rue et trottoir sont tirés de l'instruction ici même. Les
+  // demander à l'appelant lui laissait l'occasion d'en oublier : c'est ce qui
+  // arrivait, le libellé manquait, et l'exception levée à chaque position
+  // interrompait le guidage — plus de distance, plus d'alerte de soleil.
+  const { label, name, side } = describeManoeuvre(instruction);
 
   const distance = remaining <= 20 ? '' : `Dans ${roundDistance(remaining)}, `;
   const action = distance ? lowerFirst(label) : label;
