@@ -1,10 +1,10 @@
 # Ce que la machine vérifie à chaque poussée.
 #
-# Les 95 tests ne servent à rien s'ils ne tournent que lorsqu'on y pense. Ils
-# couvrent précisément ce qui casse en silence — l'aller-retour binaire, la
-# pondération d'itinéraire, le recalage GPS, la couture des graphes régionaux :
-# des défauts qui ne plantent pas, qui donnent des chiffres plausibles et faux,
-# et qu'on ne remarque donc jamais à l'usage.
+# Les 98 tests ne servent à rien s'ils ne tournent que lorsqu'on y pense. Ils
+# couvrent précisément ce qui casse en silence — les allers-retours du binaire
+# et des tuiles, la pondération d'itinéraire, le recalage GPS, la couture des
+# graphes régionaux : des défauts qui ne plantent pas, qui donnent des chiffres
+# plausibles et faux, et qu'on ne remarque donc jamais à l'usage.
 #
 # Rien ici ne demande de réseau ni de données calculées : aucun test ne
 # télécharge quoi que ce soit, et les graphes sont dessinés à la main. La
