@@ -389,7 +389,6 @@ async function writeIndex(outDir, cellDir, region, origin, cells, manifest, date
   const meta = JSON.parse(await readFile(path.join(cellDir, `${reference.key}.meta.json`), 'utf8'));
 
   let segments = 0;
-  let bytes = 0;
   const entries = [];
   for (const cell of cells) {
     const record = manifest[cell.key];
@@ -405,7 +404,7 @@ async function writeIndex(outDir, cellDir, region, origin, cells, manifest, date
       stamp: record.stamp,
     });
   }
-  bytes = entries.reduce((sum, entry) => sum + (entry.segments ?? 0) * 192, 0);
+  const bytes = entries.reduce((sum, entry) => sum + (entry.segments ?? 0) * 192, 0);
 
   const index = {
     region: region.key,

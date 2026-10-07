@@ -58,13 +58,7 @@ export default [
   {
     files: ['web/src/**/*.js', 'web/public/sw.js'],
     languageOptions: {
-      globals: {
-        ...globals.browser,
-        ...globals.serviceworker,
-        // Ordonnanceur coopératif, encore absent de la liste `globals` : c'est
-        // lui qui permet à la recherche d'itinéraire de rendre la main.
-        scheduler: 'readonly',
-      },
+      globals: { ...globals.browser, ...globals.serviceworker },
     },
   },
 
