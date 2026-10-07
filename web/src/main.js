@@ -40,6 +40,7 @@ import {
   tilesInBounds,
 } from './offline.js';
 import { createVoice, phraseFor } from './speech.js';
+import { legibleOn } from './contrast.js';
 import {
   OFF_ROUTE_METERS,
   advanceProgress,
@@ -1887,7 +1888,7 @@ function renderRouteResult(route, fastest, elapsed) {
     <div class="route-head">
       <div class="route-stat"><b>${minutes} min</b><span>durée</span></div>
       <div class="route-stat"><b>${(route.meters / 1000).toFixed(1)} km</b><span>distance</span></div>
-      <div class="route-stat" style="color:${colorFor(route.index)}">
+      <div class="route-stat" style="color:${textColorFor(route.index)}">
         <b>${Math.round(route.index)}</b><span>indice moyen</span>
       </div>
     </div>
@@ -1919,7 +1920,7 @@ function renderRouteResult(route, fastest, elapsed) {
                     <span class="jump-at">${formatMeters(jump.distance)}</span>
                     ${jump.name ? escapeHtml(jump.name) : 'sans nom'} —
                     l’indice passe de <strong>${jump.before}</strong> à
-                    <strong style="color:${colorFor(jump.after)}">${jump.after}</strong>.
+                    <strong style="color:${textColorFor(jump.after)}">${jump.after}</strong>.
                   </li>`,
                 )
                 .join('')}
@@ -2778,7 +2779,7 @@ function renderPanel(props) {
     .join(' · ');
 
   dom.panelScore.innerHTML = `
-    <span class="value" style="color:${colorFor(shown.index)}">${shown.index}</span>
+    <span class="value" style="color:${textColorFor(shown.index)}">${shown.index}</span>
     <span class="level">${levelLabel(shown.index)}</span>`;
 
   const gap = worst.index - best.index;
@@ -2889,6 +2890,17 @@ function colorFor(value) {
     if (value >= stop.value) result = stop.color;
   }
   return result;
+}
+
+/**
+ * Fond des panneaux, `--surface` de la feuille de style. La variante à fort
+ * contraste est plus sombre encore : ce qui se lit ici s'y lit aussi.
+ */
+const PANEL_BACKGROUND = '#131924';
+
+/** Couleur de l'échelle pour écrire un chiffre, et non peindre une rue. */
+function textColorFor(value) {
+  return legibleOn(colorFor(value), PANEL_BACKGROUND);
 }
 
 function labelForHighway(highway, crossing) {

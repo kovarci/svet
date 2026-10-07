@@ -74,6 +74,7 @@ l'écran, c'est-à-dire où l'on a le moins de moyens de vérifier. Ce qui est
 | `link.js` | un lien d'itinéraire qui ne rend pas ce qu'on y a mis |
 | `offline.js` | un pavage décalé, et l'on prépare le quartier d'à côté |
 | `sw.js` | un onglet rechargé hors réseau qui ne s'ouvre plus, des copies de données qui s'empilent à chaque recalcul |
+| `contrast.js` | l'indice d'un trajet abrité écrit en bleu nuit sur fond nuit, la bonne nouvelle qu'on ne lit pas |
 
 Aucun n'a besoin de réseau, de navigateur ni de données calculées : les graphes
 sont dessinés à la main, les cellules sont fausses, les positions sont posées.
