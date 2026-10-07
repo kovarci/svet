@@ -40,6 +40,16 @@ import {
   tilesInBounds,
 } from './offline.js';
 import { createVoice, phraseFor } from './speech.js';
+import {
+  emptyCollection,
+  escapeHtml,
+  formatClock,
+  formatMeters,
+  haversineMeters,
+  setHTML,
+  setText,
+} from './format.js';
+import { prefs } from './prefs.js';
 import { legibleOn } from './contrast.js';
 import {
   OFF_ROUTE_METERS,
@@ -260,47 +270,6 @@ const state = {
   dim: null,
   /** Jour de prévision affiché, au format ISO court. */
   day: null,
-};
-
-/**
- * Réglages retenus d'une visite à l'autre.
- *
- * Tout passe par ce guichet, et tout y est enveloppé d'un `try`. Ce n'est pas
- * de la prudence de principe : en navigation privée Safari, et sous une
- * politique qui bloque les cookies du site, la simple lecture de
- * `localStorage` lève une `SecurityError`. Elle survenait au démarrage, faisait
- * échouer l'initialisation entière, et l'application affichait « lancez d'abord
- * le calcul » — un conseil parfaitement inutile pour quelqu'un dont les données
- * étaient là.
- *
- * Ce qu'on retient est ce qui relève de la personne plutôt que du moment : la
- * pénombre dont elle a besoin, sa zone, sa façon de lire la carte. Pas l'heure
- * ni le trajet, qui appartiennent à la fois où on les a choisis.
- */
-const PREFS_KEY = 'svet.prefs';
-
-const prefs = {
-  read() {
-    try {
-      const stored = JSON.parse(localStorage.getItem(PREFS_KEY) ?? '{}') ?? {};
-      // Reprise de l'ancien réglage isolé, écrit par les versions précédentes.
-      if (stored.dim === undefined) {
-        const legacy = Number(localStorage.getItem('svet.dim'));
-        if (Number.isFinite(legacy) && legacy > 0) stored.dim = legacy;
-      }
-      return stored;
-    } catch {
-      return {};
-    }
-  },
-  write(patch) {
-    try {
-      localStorage.setItem(PREFS_KEY, JSON.stringify({ ...prefs.read(), ...patch }));
-    } catch {
-      // Navigation privée, quota plein, stockage refusé : le réglage ne
-      // survivra pas à cette visite. C'est tout ce qu'on perd.
-    }
-  },
 };
 
 let map;
@@ -2503,15 +2472,6 @@ async function restoreRouteFromUrl() {
   }
 }
 
-function haversineMeters(lon1, lat1, lon2, lat2) {
-  const midLat = (((lat1 + lat2) / 2) * Math.PI) / 180;
-  return Math.hypot((lon2 - lon1) * 111320 * Math.cos(midLat), (lat2 - lat1) * 111132);
-}
-
-function formatMeters(meters) {
-  return meters >= 1000 ? `${(meters / 1000).toFixed(1)} km` : `${Math.round(meters / 5) * 5} m`;
-}
-
 // --------------------------------------------------------------- recherche
 
 function setPlace(target, place) {
@@ -3338,45 +3298,6 @@ function stopPlaying() {
 }
 
 // ------------------------------------------------------------------- outils
-
-function formatClock(minutes) {
-  const total = Math.round(minutes);
-  const h = Math.floor(total / 60);
-  const m = total - h * 60;
-  return `${String(h).padStart(2, '0')}:${String(m).padStart(2, '0')}`;
-}
-
-function emptyCollection() {
-  return { type: 'FeatureCollection', features: [] };
-}
-
-/**
- * Écrit un texte, et rien du tout s'il n'a pas changé.
- *
- * Ce n'est pas une économie de rendu : une zone vivante annonce sur **mutation
- * du DOM**, pas sur changement de valeur. Réécrire la même consigne à chaque
- * point GPS la faisait donc relire à chaque seconde, alors que rien ne s'était
- * passé — le bandeau de guidage devenait inutilisable au lecteur d'écran.
- * Scoper `aria-live` était nécessaire, mais pas suffisant.
- */
-function setText(element, text) {
-  const value = String(text ?? '');
-  if (element.textContent === value) return;
-  element.textContent = value;
-}
-
-/** Même chose pour un fragment balisé — voir `setText`. */
-function setHTML(element, html) {
-  if (element.innerHTML === html) return;
-  element.innerHTML = html;
-}
-
-function escapeHtml(text) {
-  return String(text ?? '').replace(
-    /[&<>"']/g,
-    (c) => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' })[c],
-  );
-}
 
 async function loadJSON(path, options) {
   const response = await fetch(path, options);
