@@ -38,7 +38,7 @@ function recordingVoice() {
     value: { vibrate: (pattern) => vibrations.push(pattern) },
     configurable: true,
   });
-  return { voice: createVoice(), said, vibrations };
+  return { voice: createVoice(), said, vibrations, cancels: () => cancels };
 }
 
 const turn = { index: 3, type: 'left', name: 'Rue Vieille du Temple', side: 'nord' };
@@ -80,6 +80,18 @@ test('arriver directement près du virage donne l’annonce du virage, pas celle
     ['Tournez à gauche, Rue Vieille du Temple, trottoir nord.'],
   );
   assert.deepEqual(vibrations, [[90, 60, 90]]);
+});
+
+test('arrêter le guidage fait taire l’annonce en cours', () => {
+  // `stopNavigation` interrompt par un énoncé vide. Il était écarté avant
+  // l'interruption : l'annonce de départ — « itinéraire de 1 200 mètres,
+  // environ quinze minutes » — continuait après qu'on eut tout arrêté.
+  const { voice, said, cancels } = recordingVoice();
+  voice.speak('Itinéraire de 1200 mètres, environ 15 minutes.');
+  voice.speak('', { interrupt: true });
+
+  assert.equal(cancels(), 1);
+  assert.equal(said.length, 1, 'un énoncé vide ne se prononce pas');
 });
 
 test('la phrase ne dépend que de l’instruction', () => {

@@ -50,8 +50,10 @@ export function createVoice() {
   }
 
   function speak(text, { interrupt = false } = {}) {
-    if (!supported || !enabled || !text) return;
+    if (!supported || !enabled) return;
+    // L'interruption d'abord : un énoncé vide sert justement à faire taire.
     if (interrupt) synth.cancel();
+    if (!text) return;
     const utterance = new SpeechSynthesisUtterance(text);
     utterance.lang = 'fr-FR';
     if (voice) utterance.voice = voice;

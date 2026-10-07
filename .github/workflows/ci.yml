@@ -1,6 +1,6 @@
 # Ce que la machine vérifie à chaque poussée.
 #
-# Les 102 tests ne servent à rien s'ils ne tournent que lorsqu'on y pense. Ils
+# Les 103 tests ne servent à rien s'ils ne tournent que lorsqu'on y pense. Ils
 # couvrent précisément ce qui casse en silence — les allers-retours du binaire
 # et des tuiles, la pondération d'itinéraire, le recalage GPS, la couture des
 # graphes régionaux, les annonces vocales : des défauts qui ne plantent pas,
