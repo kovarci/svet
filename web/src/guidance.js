@@ -115,6 +115,8 @@ export function startNavigation() {
     hint: null,
     following: true,
     offRoute: false,
+    /** Vrai dès qu'une position est tombée sur le trajet — voir `renderNavigation`. */
+    joined: false,
     watchId: null,
     lastFix: null,
   };
@@ -204,6 +206,7 @@ function onPosition(position) {
   const fix = snapToRoute(state.route, longitude, latitude, state.nav.hint);
   state.nav.hint = fix.index;
   state.nav.offRoute = fix.offset > OFF_ROUTE_METERS;
+  if (!state.nav.offRoute) state.nav.joined = true;
 
   // Progression forcée monotone — la règle et son pourquoi sont dans
   // `advanceProgress`, où elles s'éprouvent sans capteur.
@@ -264,6 +267,22 @@ function renderNavigation(fix, accuracy) {
 
   dom.nav.classList.toggle('is-off-route', state.nav.offRoute);
   if (!state.nav.offRoute) state.nav.warnedOffRoute = false;
+
+  // Pas encore sur le trajet : on n'en est pas sorti, on ne l'a pas encore
+  // rejoint. Un départ au milieu d'un îlot, d'une cour ou d'un quai est souvent
+  // à plus de trente-cinq mètres du premier nœud du réseau ; l'alarme d'écart,
+  // voix et vibreur compris, partait alors avant le premier pas.
+  if (state.nav.offRoute && !state.nav.joined) {
+    setText(dom.navArrow, '↑');
+    setText(dom.navInstruction, 'Rejoignez l’itinéraire');
+    setHTML(
+      dom.navSide,
+      `Départ à ${Math.round(fix.offset / 5) * 5} m.
+      <button id="nav-recompute" class="link">Recalculer depuis ici</button>`,
+    );
+    setText(dom.navDistance, '');
+    return;
+  }
 
   if (state.nav.offRoute) {
     if (!state.nav.warnedOffRoute) {

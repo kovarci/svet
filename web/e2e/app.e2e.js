@@ -260,3 +260,41 @@ test(
     await context.close();
   },
 );
+
+test(
+  'partir à l’écart du réseau invite à rejoindre l’itinéraire, sans alarme',
+  { timeout: 120000 },
+  async () => {
+    // Un départ au milieu d'un îlot, d'une cour, d'un quai : à plus de 35 m du
+    // premier nœud, le bandeau criait « vous vous êtes écarté du trajet » —
+    // avant le premier pas, vibreur compris.
+    const context = await phoneContext(browser);
+    const page = await context.newPage();
+    await openApp(page, server.url, '?zone=synthese');
+    await planRoute(page, 'Rue de Rivoli', 'Rue du Temple');
+    const [lon, lat] = await page.evaluate(() => window.svet.state.route.coordinates[0]);
+    // Soixante mètres au sud du départ, au cœur de l'îlot.
+    await context.setGeolocation({ latitude: lat - 0.00054, longitude: lon + 0.0003 });
+    await page.click('#route-navigate');
+    await page.waitForFunction(() => window.svet.state.nav?.lastFix);
+    await page.waitForTimeout(300);
+
+    const before = await page.evaluate(() => ({
+      instruction: document.getElementById('nav-instruction').textContent,
+      said: window.__said.join(' / '),
+      vibrations: window.__vibrations.length,
+    }));
+    assert.equal(before.instruction, 'Rejoignez l’itinéraire');
+    assert.doesNotMatch(before.said, /écarté/);
+    assert.equal(before.vibrations, 0);
+
+    // Arrivé sur le trajet, le guidage reprend son cours ordinaire.
+    await context.setGeolocation({ latitude: lat, longitude: lon });
+    await page.waitForTimeout(300);
+    assert.notEqual(
+      await page.evaluate(() => document.getElementById('nav-instruction').textContent),
+      'Rejoignez l’itinéraire',
+    );
+    await context.close();
+  },
+);
