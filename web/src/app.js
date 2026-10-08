@@ -18,6 +18,7 @@ import { ensureNotFallbackPage } from './binary.js';
 import { createEvaluator } from './evaluation.js';
 import { escapeHtml } from './format.js';
 import { indexStreetNames } from './geocode.js';
+import { NEUTRAL } from './profile.js';
 import { prepareGraph } from './routing.js';
 
 /**
@@ -148,6 +149,10 @@ export const dom = Object.fromEntries(
     'offline-estimate',
     'offline-go',
     'offline-result',
+    'profile-toggle',
+    'profile',
+    'profile-close',
+    'profile-body',
   ].map((id) => [id.replace(/-(.)/g, (_, c) => c.toUpperCase()), document.getElementById(id)]),
 );
 
@@ -178,6 +183,8 @@ export const state = {
   graph: null,
   streets: null,
   forecast: null,
+  /** Profil de sensibilité résolu — voir `profile.js`. Neutre tant qu'on n'en a pas choisi. */
+  profile: NEUTRAL,
   /** Heure affichée, en minutes depuis minuit — continue, pas un indice de pas. */
   minutes: 780,
   mode: 'index',
@@ -216,6 +223,7 @@ export const {
   getSkyMode: () => state.skyMode,
   getDay: () => state.day,
   getMode: () => state.mode,
+  getProfile: () => state.profile,
 });
 
 /**

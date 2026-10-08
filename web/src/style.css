@@ -500,7 +500,8 @@ input:focus-visible {
 /* -------------------------------------------------------------- itinéraire */
 
 #route,
-#offline {
+#offline,
+#profile {
   position: absolute;
   top: calc(var(--topbar-h) + 10px);
   left: calc(14px + var(--safe-l));
@@ -517,13 +518,15 @@ input:focus-visible {
 }
 
 #route h2,
-#offline h2 {
+#offline h2,
+#profile h2 {
   margin: 0 0 12px;
   font-size: 16px;
 }
 
 #route-close,
-#offline-close {
+#offline-close,
+#profile-close {
   position: absolute;
   top: 8px;
   right: 10px;
@@ -825,7 +828,8 @@ button.primary:hover {
 
 /* Le panneau hors ligne partage la mise en page de l'itinéraire ; il en occupe
    la place, et les deux ne s'ouvrent jamais ensemble. */
-#offline p {
+#offline p,
+#profile p {
   font-size: 12.5px;
   line-height: 1.5;
 }
@@ -1246,4 +1250,95 @@ button.link {
     min-height: 40px;
     align-items: center;
   }
+}
+
+/* ------------------------------------------------------------------ profil */
+
+#profile fieldset {
+  margin: 0 0 12px;
+  padding: 0;
+  border: none;
+}
+
+#profile legend {
+  padding: 0;
+  margin-bottom: 6px;
+  font-size: 10px;
+  text-transform: uppercase;
+  letter-spacing: 0.09em;
+  color: var(--text-dim);
+}
+
+.preset {
+  display: flex;
+  gap: 10px;
+  align-items: flex-start;
+  /* Cible tactile d'au moins 44 px : le panneau s'utilise en marchant. */
+  min-height: 44px;
+  padding: 8px 0;
+  border-bottom: 1px solid var(--line);
+}
+
+.preset input[type='checkbox'] {
+  flex: none;
+  width: 22px;
+  height: 22px;
+  margin-top: 1px;
+}
+
+.preset label {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  font-size: 13px;
+  line-height: 1.4;
+  cursor: pointer;
+}
+
+.preset .muted,
+.preset .evidence {
+  font-size: 11.5px;
+}
+
+/* La preuve se lit en toutes lettres : pas de code couleur seul. */
+.preset .evidence {
+  color: var(--text-dim);
+  font-style: italic;
+}
+
+.preset.crisis {
+  margin-left: 32px;
+}
+
+.profile-fine,
+.profile-flags {
+  margin: 12px 0;
+  font-size: 12.5px;
+}
+
+.profile-fine summary,
+.profile-flags summary {
+  min-height: 44px;
+  display: flex;
+  align-items: center;
+  cursor: pointer;
+}
+
+.profile-slider {
+  display: grid;
+  grid-template-columns: 1fr auto;
+  gap: 2px 8px;
+  align-items: center;
+  margin: 10px 0 14px;
+}
+
+.profile-slider input[type='range'] {
+  grid-column: 1 / -1;
+  width: 100%;
+  min-height: 32px;
+}
+
+.profile-slider .slider-text {
+  font-size: 11.5px;
+  text-align: right;
 }

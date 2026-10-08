@@ -213,6 +213,9 @@ const SLICE_MS = 8;
  * @param {number} goal nœud d'arrivée
  * @param {object} options
  * @param {number} options.alpha 0 = le plus rapide, 3 = très évitant
+ * @param {number} [options.tolerance] indice au-delà duquel l'exposition coûte plus
+ *        cher (profil personnel) ; 100 ou absent : aucune pénalité
+ * @param {number} [options.penalty] poids de ce dépassement
  * @param {number} options.speed vitesse de marche, en m/s
  * @param {number} options.crossingPenalty secondes perdues à une traversée
  * @param {number} options.departureMinutes heure de départ, en minutes locales
@@ -224,6 +227,10 @@ const SLICE_MS = 8;
  */
 export async function findRoute(graph, start, goal, options) {
   const { alpha, speed, crossingPenalty, departureMinutes, evaluate, signal, blocking } = options;
+  // Une priorité nulle reste « le plus rapide » : le seuil personnel n'y change
+  // rien, sans quoi le curseur ne voudrait plus dire ce qu'il dit.
+  const tolerance = alpha > 0 ? (options.tolerance ?? 100) : 100;
+  const penalty = options.penalty ?? 0;
   const size = graph.size;
   let sliceEnd = now() + SLICE_MS;
   // Une recherche déjà dépassée avant d'avoir commencé ne doit pas commencer :
@@ -286,7 +293,11 @@ export async function findRoute(graph, start, goal, options) {
       // trois fois sa durée, ce qui suffit à préférer l'autre trottoir dès
       // qu'il existe, sans jamais rendre le trajet impossible.
       const detour = 1 + 2 * ((work ?? 0) / 100);
-      const candidate = cost[current] + seconds * detour * (1 + alpha * (index / 100));
+      // Au-delà de la tolérance personnelle, chaque point d'indice coûte en plus.
+      // Les deux termes sont positifs : le minorant de l'heuristique reste valable.
+      const excess = Math.max(0, index - tolerance) / 100;
+      const candidate =
+        cost[current] + seconds * detour * (1 + alpha * (index / 100) + penalty * excess);
 
       if (candidate < cost[next]) {
         cost[next] = candidate;

@@ -64,6 +64,7 @@ import { closeDetailPanel } from './panel.js';
 import { startNavigation, stopNavigation, voice } from './guidance.js';
 import { computeRoute, restoreRouteFromUrl, setRoutePanel } from './route.js';
 import { runOffline, setOfflinePanel } from './offline-ui.js';
+import { bindProfile, loadProfile, setProfilePanel } from './profile-ui.js';
 import { components, discomfortIndex, skyConditions } from '@svet/pipeline/model';
 import { localDate } from '@svet/pipeline/sun';
 
@@ -104,6 +105,7 @@ async function start() {
     state.zones[state.zones.length - 1];
   dom.zone.value = zone.key;
   applySavedReading(saved);
+  loadProfile();
 
   setMap(
     new maplibregl.Map({
@@ -549,8 +551,14 @@ function bindControls() {
   dom.routeToggle.addEventListener('click', () => setRoutePanel(dom.route.hidden));
   dom.routeClose.addEventListener('click', () => setRoutePanel(false));
 
-  dom.offlineToggle.addEventListener('click', () => setOfflinePanel(dom.offline.hidden));
+  // Ces deux panneaux s'ouvrent depuis le tiroir de réglages. Sur téléphone, il
+  // couvrirait le panneau qu'on vient d'ouvrir : on le replie au même geste.
+  dom.offlineToggle.addEventListener('click', () => {
+    setOfflinePanel(dom.offline.hidden);
+    setSettingsOpen(false);
+  });
   dom.offlineClose.addEventListener('click', () => setOfflinePanel(false));
+  bindProfile({ onOpen: () => setSettingsOpen(false) });
   dom.offlineGo.addEventListener('click', () => runOffline());
 
   dom.play.addEventListener('click', () => (state.playing ? stopPlaying() : startPlaying()));
@@ -692,6 +700,7 @@ function closeTopmost() {
   if (state.picking) stopPicking();
   else if (dom.topbar.classList.contains('is-open')) setSettingsOpen(false);
   else if (!dom.offline.hidden) setOfflinePanel(false);
+  else if (!dom.profile.hidden) setProfilePanel(false);
   else if (!dom.route.hidden) setRoutePanel(false);
   else if (!dom.panel.hidden) closeDetailPanel();
 }

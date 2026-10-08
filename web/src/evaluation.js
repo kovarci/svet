@@ -1,10 +1,4 @@
-import {
-  components,
-  discomfortIndex,
-  localUV,
-  skyConditions,
-  wetnessFromRain,
-} from '@svet/pipeline/model';
+import { components, localUV, skyConditions, wetnessFromRain } from '@svet/pipeline/model';
 import {
   applyRefraction,
   dayOfYear,
@@ -14,6 +8,7 @@ import {
   DEG,
 } from '@svet/pipeline/sun';
 
+import { NEUTRAL, personalIndex } from './profile.js';
 import { CLEAR_SKY } from './weather.js';
 
 /**
@@ -69,8 +64,17 @@ export function uvFallback(altitude) {
  * @param {() => string} sources.getSkyMode `forecast` ou `clear`
  * @param {() => string|null} sources.getDay jour de prévision affiché
  * @param {() => string} sources.getMode mode de lecture de la carte
+ * @param {() => object} [sources.getProfile] profil de sensibilité ; neutre par défaut
  */
-export function createEvaluator({ getMeta, getData, getForecast, getSkyMode, getDay, getMode }) {
+export function createEvaluator({
+  getMeta,
+  getData,
+  getForecast,
+  getSkyMode,
+  getDay,
+  getMode,
+  getProfile = () => NEUTRAL,
+}) {
   /**
    * Position du soleil à l'instant exact demandé.
    *
@@ -224,6 +228,7 @@ export function createEvaluator({ getMeta, getData, getForecast, getSkyMode, get
     const cursor = seriesCursor(context.minutes);
     const { transmission, flicker } = sampleSide(entry, cursor);
     const svf = entry.svf / 100;
+    const profile = getProfile();
     const c = components({
       transmission,
       svf,
@@ -239,24 +244,27 @@ export function createEvaluator({ getMeta, getData, getForecast, getSkyMode, get
       // Chaussée mouillée : elle renvoie le soleil bas en miroir.
       wet: wetnessFromRain(context.weather.rain),
       luxReference: meta.luxReference,
-      veil: entry.veil,
+      // Facteur de diffusion de l'œil : de la lumière reçue en plus, donc de la
+      // physique — il agit ici, avant la saturation de la composante.
+      veil: entry.veil * profile.f,
       sky: context.sky,
     });
+    // Le partage direct/diffus de l'UV dépend de la hauteur du soleil et de la
+    // couverture : à 10° de hauteur, l'essentiel de l'UV est déjà diffusé, et un
+    // immeuble n'en protège presque plus.
+    const uv = localUV(
+      context.weather.uv ?? uvFallback(context.sun.altitude),
+      transmission,
+      svf,
+      context.sun.altitude * DEG,
+      context.sky.directShare,
+    );
     return {
       ...c,
       transmission,
       svf,
-      index: discomfortIndex(c, meta.weights),
-      // Le partage direct/diffus de l'UV dépend de la hauteur du soleil et de la
-      // couverture : à 10° de hauteur, l'essentiel de l'UV est déjà diffusé, et un
-      // immeuble n'en protège presque plus.
-      uv: localUV(
-        context.weather.uv ?? uvFallback(context.sun.altitude),
-        transmission,
-        svf,
-        context.sun.altitude * DEG,
-        context.sky.directShare,
-      ),
+      index: personalIndex(c, meta.weights, profile, uv),
+      uv,
       side: entry.side,
       canopy: entry.canopy,
       // Part du trottoir barrée par un chantier. Elle ne rentre pas dans

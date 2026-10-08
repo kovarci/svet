@@ -19,6 +19,7 @@ import {
   prefetch,
   tilesInBounds,
 } from './offline.js';
+import { setProfilePanel } from './profile-ui.js';
 import { setRoutePanel } from './route.js';
 
 // ------------------------------------------------------------------ hors ligne
@@ -67,6 +68,7 @@ export function setOfflinePanel(open) {
   // Les deux panneaux occupent la même place à l'écran ; ouvrir l'un ferme donc
   // l'autre, plutôt que de les empiler.
   if (open && !dom.route.hidden) setRoutePanel(false);
+  if (open && !dom.profile.hidden) setProfilePanel(false);
   dom.offline.hidden = !open;
   dom.offlineToggle.classList.toggle('is-on', open);
   dom.offlineToggle.setAttribute('aria-expanded', String(open));

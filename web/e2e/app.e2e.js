@@ -335,3 +335,42 @@ test(
     }
   },
 );
+
+test('un profil se choisit, survit au rechargement, et ne sort pas de l’appareil', async () => {
+  const context = await phoneContext(browser);
+  const page = await context.newPage();
+  const errors = collectErrors(page);
+  await openApp(page, server.url, '?zone=synthese');
+
+  const neutral = await page.evaluate(() => window.svet.state.profile.s);
+  assert.equal(neutral, 1);
+
+  await page.click('#settings-toggle');
+  await page.click('#profile-toggle');
+  await page.waitForSelector('#profile:not([hidden])');
+  await page.check('#preset-migraine');
+  const chosen = await page.evaluate(() => ({
+    s: window.svet.state.profile.s,
+    flicker: window.svet.state.profile.mu.flicker,
+    on: document.getElementById('profile-toggle').classList.contains('is-on'),
+  }));
+  assert.equal(chosen.s, 0.5);
+  assert.ok(chosen.flicker > 1);
+  assert.ok(chosen.on, 'le bouton signale un profil actif');
+
+  // La carte a bien été recolorée avec le profil, pas laissée à l'ancien indice.
+  const url = await page.evaluate(() => location.href);
+  assert.doesNotMatch(url, /migraine|profil|preset/i, 'le profil ne passe jamais dans le lien');
+
+  await page.reload();
+  await page.waitForFunction(() => window.svet?.state?.meta);
+  assert.equal(await page.evaluate(() => window.svet.state.profile.s), 0.5);
+
+  await page.click('#settings-toggle');
+  await page.click('#profile-toggle');
+  await page.click('text=Effacer mon profil');
+  assert.equal(await page.evaluate(() => window.svet.state.profile.s), 1);
+  assert.equal(await page.evaluate(() => localStorage.getItem('svet.profile')), null);
+  assert.deepEqual(errors, []);
+  await context.close();
+});

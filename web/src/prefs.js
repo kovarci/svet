@@ -38,3 +38,41 @@ export const prefs = {
     }
   },
 };
+
+/**
+ * Le profil de sensibilité, dans une clé à part.
+ *
+ * C'est une donnée de santé au sens du RGPD (art. 9) : elle reste dans ce
+ * navigateur, n'est écrite ni dans l'URL de partage ni ailleurs, et s'efface en
+ * un geste. Une clé dédiée évite qu'un réglage d'affichage la réécrive en
+ * passant, et permet de la supprimer sans toucher au reste.
+ */
+const PROFILE_KEY = 'svet.profile';
+
+export const profileStore = {
+  read() {
+    try {
+      const stored = JSON.parse(localStorage.getItem(PROFILE_KEY) ?? '{}');
+      return stored && typeof stored === 'object' && !Array.isArray(stored) ? stored : {};
+    } catch {
+      return {};
+    }
+  },
+  /** @returns {boolean} vrai si l'écriture a réussi : sinon le profil ne survivra pas */
+  write(stored) {
+    try {
+      localStorage.setItem(PROFILE_KEY, JSON.stringify(stored));
+      return true;
+    } catch {
+      return false;
+    }
+  },
+  clear() {
+    try {
+      localStorage.removeItem(PROFILE_KEY);
+      return true;
+    } catch {
+      return false;
+    }
+  },
+};

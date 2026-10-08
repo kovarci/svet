@@ -19,6 +19,8 @@ import { startNavigation } from './guidance.js';
 import { applyTime } from './layers.js';
 import { readRoute, writeRoute } from './link.js';
 import { setOfflinePanel } from './offline-ui.js';
+import { PENALTY, tolerance } from './profile.js';
+import { setProfilePanel } from './profile-ui.js';
 import { colorFor, textColorFor } from './panel.js';
 import { findRoute, nearestNode, summarize, transitions, SearchAborted } from './routing.js';
 import { setPlace, stopPicking } from './search.js';
@@ -35,6 +37,7 @@ import { setPlace, stopPicking } from './search.js';
 export function setRoutePanel(open) {
   if (!open && dom.route.contains(document.activeElement)) dom.routeToggle.focus();
   if (open && !dom.offline.hidden) setOfflinePanel(false);
+  if (open && !dom.profile.hidden) setProfilePanel(false);
 
   dom.route.hidden = !open;
   dom.routeToggle.classList.toggle('is-on', open);
@@ -161,6 +164,9 @@ export async function computeRoute() {
     crossingPenalty: state.meta.crossingPenalty ?? 25,
     departureMinutes: state.minutes,
     evaluate: evaluateSegment,
+    // Seuil personnel : au-delà, l'exposition coûte plus cher. Neutre = 100.
+    tolerance: tolerance(state.profile),
+    penalty: PENALTY,
   };
 
   const signal = beginSearch();

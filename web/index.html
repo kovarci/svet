@@ -112,6 +112,16 @@
         >
           Hors ligne
         </button>
+        <button
+          id="profile-toggle"
+          class="toggle"
+          type="button"
+          aria-expanded="false"
+          aria-controls="profile"
+          title="Régler ce qui vous gêne dans la lumière"
+        >
+          Mon profil
+        </button>
         <label class="field dimmer-field">
           <span>Pénombre</span>
           <input
@@ -254,6 +264,15 @@
       <div id="offline-estimate"></div>
       <button id="offline-go" class="primary" type="button">Télécharger</button>
       <div id="offline-result"></div>
+    </aside>
+
+    <!-- ------------------------------------------------------- profil ---- -->
+    <!-- Rempli par `profile-ui.js`. Le profil est une donnée de santé : il reste
+         dans ce navigateur, voir `prefs.js`. -->
+    <aside id="profile" aria-label="Mon profil de lumière" hidden>
+      <button id="profile-close" type="button" aria-label="Fermer">×</button>
+      <h2>Mon profil de lumière</h2>
+      <div id="profile-body"></div>
     </aside>
 
     <!-- ------------------------------------------------------ détail rue -->

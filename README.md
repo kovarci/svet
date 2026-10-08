@@ -1302,6 +1302,47 @@ L'interface est volontairement sombre et peu contrastée. Une interface blanche
 pour une application destinée à des personnes que la lumière fait souffrir
 serait une contradiction.
 
+### Mon profil de lumière
+
+Le bouton **Mon profil** règle ce qui gêne et jusqu'où. Il ne change rien à la
+physique du modèle : il change la façon dont l'indice la compose, et le seuil à
+partir duquel l'itinéraire se met à payer l'exposition. Trois étages, séparés à
+dessein :
+
+1. **Ce qui gêne** — l'importance de chaque composante (soleil, soleil bas,
+   ciel et lumière ambiante, parois, scintillement, lampadaires), appliquée
+   *après* les saturations puis renormalisée. L'échelle 0-100 et les couleurs
+   restent donc comparables d'une personne à l'autre.
+2. **La physique de l'œil** — un facteur de diffusion (yeux très clairs, iris
+   absent) qui amplifie le **voile nocturne**, c'est-à-dire de la lumière reçue
+   en plus.
+3. **Jusqu'où** — la sensibilité ne touche pas l'indice. Elle abaisse le seuil
+   `100·s^0,6` au-delà duquel chaque point d'indice coûte trois fois plus cher
+   dans l'itinéraire. Un curseur de priorité à zéro reste « le plus rapide ».
+
+*Pourquoi pas simplement abaisser les seuils de saturation ?* Parce que toutes
+les composantes saturent au soleil : l'écart entre le quai et la rue à l'ombre
+passait de 50 à 27 points pour un profil « crise de migraine », et l'itinéraire
+choisissait alors le quai ensoleillé plutôt que le détour ombragé. Plus on se
+déclarait sensible, moins on évitait la lumière.
+
+Les onze préréglages sont nommés par une expérience vécue, jamais par un
+diagnostic, et chacun affiche son **niveau de preuve**. Leurs valeurs sont des
+**hypothèses de conception** tirées de la littérature, pas des prescriptions ;
+seule une étude d'usage (journal de trajets et gêne déclarée) pourrait les
+calibrer. Combiner plusieurs préréglages prend le pire de chaque grandeur, jamais
+la moyenne, qui diluerait ce que chacun cherche à éviter.
+
+Le profil est une **donnée de santé** : il reste dans ce navigateur (clé
+`svet.profile`), n'entre dans aucun lien partagé, n'est jamais envoyé, et
+s'efface en un geste. SVET estime une exposition lumineuse modélisée ; il ne
+diagnostique, ne soigne et ne prévient rien.
+
+Pas encore faits : l'âge et la couleur des yeux (le facteur de diffusion ne vaut
+que par les préréglages), le facteur de diffusion appliqué à l'éblouissement
+solaire, la couleur de la lumière (mélanopique ou photopique), le hachurage des
+tronçons au-delà du seuil, l'export du profil, l'option « trajets réguliers ».
+
 ---
 
 ## Est-ce que ça se met à jour tout seul ?
@@ -1831,7 +1872,9 @@ web/
     offline-ui.js      panneau hors ligne
     evaluation.js      exposition d'un trottoir à une minute donnée
     format.js          mise en forme, écriture prudente dans le DOM
-    prefs.js           réglages retenus d'une visite à l'autre
+    prefs.js           réglages retenus d'une visite à l'autre, et profil (clé à part)
+    profile.js         profils de sensibilité : préréglages, poids, tolérance
+    profile-ui.js      l'écran « Mon profil de lumière »
     contrast.js        couleurs de l'échelle rendues lisibles comme texte
     binary.js          lecture du fichier de zone, par vues typées
     cells.js           chargement d'une région par cellules, couture des graphes

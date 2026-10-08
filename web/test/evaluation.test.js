@@ -19,6 +19,7 @@ import { CONFIG } from '../../pipeline/src/config.js';
 import { skyConditions } from '../../pipeline/src/model.js';
 import { DEG } from '../../pipeline/src/lib/sun.js';
 import { createEvaluator, sampleSide, uvFallback } from '../src/evaluation.js';
+import { NEUTRAL, resolve } from '../src/profile.js';
 import { CLEAR_SKY } from '../src/weather.js';
 
 const BINS = 16;
@@ -123,6 +124,7 @@ function setup(overrides = {}) {
     getSkyMode: () => world.skyMode,
     getDay: () => world.day,
     getMode: () => world.mode,
+    getProfile: world.profile ? () => world.profile : undefined,
   });
   return { world, ...evaluator };
 }
@@ -381,4 +383,36 @@ test('le point de rosée prévu atteint le ciel', () => {
   const arid = setup({ forecast: dry, day: '2026-06-21' }).contextAt(735);
   assert.equal(wet.weather.dewPoint, 20);
   assert.notEqual(wet.sky.directNormal, arid.sky.directNormal);
+});
+
+test('sans profil, ou avec le profil neutre, l’indice est celui d’avant', () => {
+  const bare = setup();
+  const neutral = setup({ profile: NEUTRAL });
+  for (const right of [false, true]) {
+    const a = bare.evaluateSide(bare.sideOf(0, right), bare.contextAt(735));
+    const b = neutral.evaluateSide(neutral.sideOf(0, right), neutral.contextAt(735));
+    assert.equal(b.index, a.index);
+  }
+});
+
+test('un profil qui surveille le scintillement le voit dans l’indice', () => {
+  // Trottoir sous feuillage : le scintillement est la composante qui domine.
+  const leafy = series([60, 60, 60, 60], [100, 100, 100, 100], 40);
+  const rows = [{ segment: street(), left: leafy, right: leafy }];
+  const base = setup({ data: toyData(rows) });
+  const watchful = setup({ data: toyData(rows), profile: resolve({ mu: { flicker: 3 } }) });
+  const a = base.evaluateSide(base.sideOf(0, false), base.contextAt(735));
+  const b = watchful.evaluateSide(watchful.sideOf(0, false), watchful.contextAt(735));
+  assert.ok(b.index > a.index, `${b.index} > ${a.index}`);
+  // Les composantes elles-mêmes sont de la physique : le profil n'y touche pas.
+  assert.equal(b.flicker, a.flicker);
+  assert.equal(b.glare, a.glare);
+});
+
+test('le profil est relu à chaque évaluation', () => {
+  const world = setup({ profile: NEUTRAL });
+  const before = world.evaluateSide(world.sideOf(0, false), world.contextAt(735)).index;
+  world.world.profile = resolve({ mu: { sun: 0, sky: 0, bright: 0, reverb: 0, glare: 0 } });
+  const after = world.evaluateSide(world.sideOf(0, false), world.contextAt(735)).index;
+  assert.notEqual(after, before);
 });

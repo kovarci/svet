@@ -820,7 +820,10 @@ export function discomfortIndex(c, weights) {
     // l'ajout de cette composante doit continuer à donner exactement les mêmes
     // chiffres, plutôt que de dériver en silence.
     (weights.glare ?? 0) * (c.glare ?? 0) +
-    weights.flicker * (c.flicker ?? 0);
+    weights.flicker * (c.flicker ?? 0) +
+    // Les UV n'entrent dans l'indice que pour un profil qui les demande (poids
+    // personnel) : le poids de zone est nul, donc rien ne change par défaut.
+    (weights.uv ?? 0) * (c.uvc ?? 0);
 
   // Le jour et la nuit ne se comparent pas terme à terme : de jour la gêne est
   // une nappe diffuse, de nuit une poignée de sources vives dans un champ
