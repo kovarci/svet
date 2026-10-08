@@ -5,7 +5,14 @@ import {
   skyConditions,
   wetnessFromRain,
 } from '@svet/pipeline/model';
-import { applyRefraction, localToUTC, sunPosition, DEG } from '@svet/pipeline/sun';
+import {
+  applyRefraction,
+  dayOfYear,
+  localToUTC,
+  precipitableWater,
+  sunPosition,
+  DEG,
+} from '@svet/pipeline/sun';
 
 import { CLEAR_SKY } from './weather.js';
 
@@ -117,6 +124,12 @@ export function createEvaluator({ getMeta, getData, getForecast, getSkyMode, get
       cloud: mix(a.cloud, b.cloud),
       uv: mix(a.uv, b.uv),
       rain: mix(a.rain ?? 0, b.rain ?? 0),
+      // Le point de rosée donne l'eau précipitable, dont dépendent les
+      // efficacités lumineuses de Perez — à défaut, 2 cm.
+      dewPoint:
+        Number.isFinite(a.dewPoint) && Number.isFinite(b.dewPoint)
+          ? mix(a.dewPoint, b.dewPoint)
+          : null,
       // Les flux modélisés doivent traverser cette interpolation comme le reste :
       // les oublier ici ferait silencieusement retomber tout le modèle sur la
       // déduction par nébulosité, celle qui se trompe de 27 klx.
@@ -163,6 +176,12 @@ export function createEvaluator({ getMeta, getData, getForecast, getSkyMode, get
         weather.irradiance,
         sun.azimuth,
         getMeta().horizonBins ?? 16,
+        // La date règle l'excentricité de l'orbite et le trouble mensuel ; le
+        // point de rosée, l'efficacité lumineuse.
+        {
+          dayOfYear: dayOfYear(getMeta().date),
+          precipitableWater: precipitableWater(weather.dewPoint),
+        },
       ),
     };
     contextCache.set(key, context);

@@ -26,8 +26,12 @@ import {
   localMinutes,
   airMass,
   clearSkyIlluminance,
-  linkeFromBeam,
+  clearSkyIrradiance,
+  eccentricity,
+  linkeTurbidity,
+  luminousEfficacy,
   perezSkyIndices,
+  precipitableWater,
   PEREZ_BINS,
   DEG,
 } from '../src/lib/sun.js';
@@ -323,13 +327,14 @@ test('le ciel anisotrope survit à un changement du nombre de secteurs', () => {
 test('la clarté de Perez classe les ciels dans le bon ordre', () => {
   // ε ≈ 1 sous la couche, > 6 par ciel bleu franc. C'est l'indice normalisé,
   // et il doit croître avec la part de faisceau direct.
-  const overcast = perezSkyIndices(0, 20000, 40 / DEG);
-  const hazy = perezSkyIndices(20000, 15000, 40 / DEG);
-  // Ciel clair parisien courant : 85 klx de faisceau pour 12 klx de diffus.
+  // En W/m², l'unité dans laquelle Perez les définit.
+  const overcast = perezSkyIndices(0, 170, 40 / DEG);
+  const hazy = perezSkyIndices(190, 125, 40 / DEG);
+  // Ciel clair parisien courant : 810 W/m² de faisceau pour 100 de diffus.
   // Il tombe en catégorie 7 de Perez, pas 8 — la catégorie 8 demande un diffus
   // bien plus faible, c'est-à-dire un air de montagne.
-  const clear = perezSkyIndices(85000, 12000, 40 / DEG);
-  const veryClear = perezSkyIndices(95000, 7000, 40 / DEG);
+  const clear = perezSkyIndices(810, 100, 40 / DEG);
+  const veryClear = perezSkyIndices(905, 58, 40 / DEG);
   assert.ok(overcast.epsilon < 1.1, `couvert : ε = ${overcast.epsilon.toFixed(2)}`);
   assert.ok(hazy.epsilon > overcast.epsilon, 'un ciel voilé est plus clair qu’un couvert');
   assert.ok(clear.epsilon > PEREZ_BINS[5], `ciel clair : ε = ${clear.epsilon.toFixed(2)}`);
@@ -340,22 +345,94 @@ test('la clarté de Perez classe les ciels dans le bon ordre', () => {
   assert.ok(clear.brightness > 0 && clear.brightness < 1, 'Δ doit rester borné');
 });
 
-test('le trouble de Linke se relit dans le faisceau mesuré', () => {
-  // Aller-retour : on synthétise un faisceau pour un trouble donné, puis on le
-  // redéduit. C'est l'inverse exact de l'extinction ESRA.
-  for (const turbidity of [2.5, 4, 6]) {
-    for (const altitudeDeg of [15, 40, 65]) {
-      const { directNormal } = clearSkyIlluminance(altitudeDeg / DEG, turbidity);
-      const found = linkeFromBeam(directNormal, altitudeDeg / DEG);
-      assert.ok(
-        Math.abs(found - turbidity) < 0.01,
-        `T_L ${turbidity} à ${altitudeDeg}° relu ${found.toFixed(2)}`,
-      );
+const near = (actual, expected, tolerance, label) =>
+  assert.ok(
+    Math.abs(actual - expected) <= tolerance,
+    `${label} : ${actual.toFixed(4)} au lieu de ${expected} ± ${tolerance}`,
+  );
+
+test('le ciel clair ESRA redonne les valeurs de référence', () => {
+  // Valeurs calculées par une réplique indépendante d'ESRA (Rigollier et al.
+  // 2000), validée sur les mesures BSRN de Payerne : avec le trouble du jour,
+  // faisceau à ±2 % au-dessus de 15° de hauteur.
+  const cases = [
+    [20, 3.1, 172, 643.2, 71.3],
+    [5, 3.1, 172, 273.3, 29.2],
+    [60, 3.1, 172, 915.6, 109.1],
+    [10, 2.75, 355, 532.2, 43.3],
+  ];
+  for (const [deg, turbidity, day, beam, diffuse] of cases) {
+    const sky = clearSkyIrradiance(deg / DEG, turbidity, day);
+    near(sky.directNormal, beam, 0.15, `faisceau à ${deg}°, jour ${day}`);
+    near(sky.diffuseHorizontal, diffuse, 0.15, `diffus à ${deg}°, jour ${day}`);
+  }
+  near(eccentricity(172), 0.96745, 1e-4, 'excentricité au solstice d’été');
+  near(eccentricity(355), 1.0326, 1e-4, 'excentricité en décembre');
+});
+
+test('le trouble de Linke suit la climatologie mensuelle de Paris', () => {
+  // Remund et al. 2003 (SoDa), lu au point de Paris : il n'est pas de 4 toute
+  // l'année, et l'été n'est pas le plus trouble.
+  near(linkeTurbidity(166), 3.1, 1e-9, 'mi-juin');
+  near(linkeTurbidity(15), 2.65, 1e-9, 'mi-janvier');
+  // Entre deux mois, une interpolation continue, y compris au passage de l'an.
+  const dec31 = linkeTurbidity(365);
+  assert.ok(dec31 > 2.65 && dec31 < 2.75, `31 décembre : ${dec31}`);
+});
+
+test('les efficacités lumineuses suivent Perez 1990, et chutent au soleil bas', () => {
+  // Le faisceau rasant traverse plus d'atmosphère, qui en retire surtout le
+  // bleu et le vert : il éclaire moins par watt. 105 lm/W constants le
+  // surestimaient de 140 % entre 2 et 5° — le régime même de l'éblouissement.
+  near(precipitableWater(10), 1.868, 1e-3, 'eau précipitable à 10 °C de rosée');
+  const cases = [
+    [643.2, 71.3, 20, 89.5, 154.5],
+    [273.3, 29.2, 5, 48.7, 152.9],
+    [915.6, 109.1, 60, 103.2, 132.4],
+  ];
+  for (const [beam, diffuse, deg, kb, kd] of cases) {
+    const k = luminousEfficacy(beam, diffuse, deg / DEG, 172, 1.868);
+    near(k.beam, kb, 0.1, `faisceau à ${deg}°`);
+    near(k.diffuse, kd, 0.1, `diffus à ${deg}°`);
+  }
+  const twenty = luminousEfficacy(643.2, 71.3, 20 / DEG, 172, 1.868);
+  near(twenty.epsilon, 4.112, 1e-3, 'clarté ε');
+  near(twenty.brightness, 0.1572, 1e-4, 'luminosité Δ');
+  assert.equal(twenty.category, 6);
+  assert.equal(luminousEfficacy(915.6, 109.1, 60 / DEG, 172, 1.868).category, 8);
+
+  const at = (deg) => {
+    const sky = clearSkyIrradiance(deg / DEG, 3.1, 172);
+    return luminousEfficacy(sky.directNormal, sky.diffuseHorizontal, deg / DEG, 172, 2).beam;
+  };
+  assert.ok(at(5) < at(20) && at(20) < at(60), 'le faisceau rasant éclaire moins par watt');
+});
+
+test('la nuit et le crépuscule ne font pas diverger les efficacités lumineuses', () => {
+  // L'efficacité de Perez dépend de exp(5,73·Z − 5), qui explose pour un soleil
+  // sous l'horizon : c'est la multiplication par un faisceau nul qui la rend
+  // inoffensive, et c'est ce que ce test garde de toute simplification.
+  for (const deg of [-30, -6, -0.5, 0, 0.2]) {
+    for (const sky of [
+      skyConditions(deg / DEG, 0, { beam: 0, diffuse: 0 }, 3, 16),
+      skyConditions(deg / DEG, 0.5, null, 3, 16),
+    ]) {
+      for (const key of ['directNormal', 'diffuseHorizontal', 'epsilon', 'brightness']) {
+        assert.ok(Number.isFinite(sky[key]), `${deg}° : ${key} = ${sky[key]}`);
+      }
     }
   }
-  // Un disque masqué par un nuage n'est pas une atmosphère : on ne le traduit pas.
-  assert.ok(linkeFromBeam(200, 40 / DEG) <= 8);
-  assert.ok(linkeFromBeam(0, 40 / DEG) > 0);
+  assert.equal(skyConditions(-6 / DEG, 0, { beam: 0, diffuse: 0 }, 3, 16).directNormal, 0);
+});
+
+test('l’éclairement de ciel clair en lux combine ESRA et Perez', () => {
+  const lux = clearSkyIlluminance(20 / DEG, {
+    turbidity: 3.1,
+    dayOfYear: 172,
+    precipitableWater: 1.868,
+  });
+  near(lux.directNormal / 57559, 1, 0.002, 'faisceau à 20°, 21 juin');
+  near(lux.diffuseHorizontal / 11021, 1, 0.002, 'diffus à 20°, 21 juin');
 });
 
 test('sous un ciel couvert, une ruelle reçoit plus que sa part géométrique', () => {
@@ -427,8 +504,8 @@ test('l’éclairement direct par ciel clair reste dans les ordres mesurés', ()
     `direct normal à midi : ${Math.round(noon.directNormal)} lux`,
   );
   // Une atmosphère plus trouble éteint le faisceau et charge le diffus.
-  const clean = clearSkyIlluminance(64.6 / DEG, 2.5);
-  const hazy = clearSkyIlluminance(64.6 / DEG, 6);
+  const clean = clearSkyIlluminance(64.6 / DEG, { turbidity: 2.5 });
+  const hazy = clearSkyIlluminance(64.6 / DEG, { turbidity: 6 });
   assert.ok(clean.directNormal > hazy.directNormal, 'plus de trouble, moins de faisceau');
   assert.ok(hazy.diffuseHorizontal > clean.diffuseHorizontal, 'plus de trouble, plus de diffus');
   assert.equal(clearSkyIlluminance(-1 / DEG).directNormal, 0, 'sous l’horizon, rien');

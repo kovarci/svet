@@ -65,7 +65,8 @@ export async function fetchForecast({ center, date, times, days = FORECAST_DAYS 
     // Les précipitations servent à mouiller la chaussée : une chaussée humide
     // réfléchit le soleil bas en miroir, ce qui est l'une des situations les
     // plus pénibles pour ce public et que le modèle ignorait entièrement.
-    hourly: 'cloud_cover,uv_index,direct_normal_irradiance,diffuse_radiation,precipitation',
+    hourly:
+      'cloud_cover,uv_index,direct_normal_irradiance,diffuse_radiation,precipitation,dew_point_2m',
     timezone: 'Europe/Paris',
     start_date: date,
     end_date: addDays(date, Math.max(1, days) - 1),
@@ -81,6 +82,7 @@ export async function fetchForecast({ center, date, times, days = FORECAST_DAYS 
   const beam = data?.hourly?.direct_normal_irradiance;
   const diffuse = data?.hourly?.diffuse_radiation;
   const rain = data?.hourly?.precipitation;
+  const dew = data?.hourly?.dew_point_2m;
   if (!hours?.length || !clouds?.length) return null;
 
   // Open-Meteo ne couvre qu'une fenêtre autour d'aujourd'hui. Hors de cette
@@ -106,6 +108,7 @@ export async function fetchForecast({ center, date, times, days = FORECAST_DAYS 
       beam: measured ? (beam[i] ?? 0) : null,
       diffuse: measured ? (diffuse[i] ?? 0) : null,
       rain: rain?.[i] ?? 0,
+      dewPoint: dew?.[i] ?? null,
     });
   });
 
@@ -138,6 +141,10 @@ function interpolate(series, minutes) {
       uv: before.uv + (after.uv - before.uv) * t,
       irradiance: before.beam === null ? null : { beam: mix('beam'), diffuse: mix('diffuse') },
       rain: before.rain + (after.rain - before.rain) * t,
+      dewPoint:
+        before.dewPoint === null || after.dewPoint === null
+          ? null
+          : before.dewPoint + (after.dewPoint - before.dewPoint) * t,
       source: 'météo',
     };
   }
@@ -150,6 +157,7 @@ function pick(entry) {
     uv: entry.uv,
     irradiance: entry.beam === null ? null : { beam: entry.beam, diffuse: entry.diffuse },
     rain: entry.rain ?? 0,
+    dewPoint: entry.dewPoint ?? null,
     source: 'météo',
   };
 }

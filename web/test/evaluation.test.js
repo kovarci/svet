@@ -158,6 +158,7 @@ test('la météo interpolée garde les flux mesurés', () => {
     cloud: 0.5,
     uv: 7,
     rain: 0.5,
+    dewPoint: null,
     irradiance: { beam: 700, diffuse: 150 },
     source: 'météo',
   });
@@ -172,6 +173,8 @@ test('la météo interpolée garde les flux mesurés', () => {
     { beam: 700, diffuse: 150 },
     context.sun.azimuth,
     BINS,
+    // 21 juin, sans point de rosée : 2 cm d'eau précipitable.
+    { dayOfYear: 172, precipitableWater: 2 },
   );
   assert.equal(context.sky.directNormal, expected.directNormal);
   assert.equal(context.sky.diffuseHorizontal, expected.diffuseHorizontal);
@@ -353,4 +356,29 @@ test('le soleil suit la date de la zone, et l’UV sans prévision sa hauteur', 
   assert.equal(uvFallback(0), 0);
   assert.equal(uvFallback(Math.PI / 2), 8.5);
   assert.ok(uvFallback(0.3) < uvFallback(0.6));
+});
+
+test('le point de rosée prévu atteint le ciel', () => {
+  // Les efficacités lumineuses de Perez dépendent de l'eau précipitable : un
+  // ciel calculé sans l'humidité prévue serait faux de quelques pour cent sans
+  // que rien ne le signale.
+  const humid = {
+    dates: ['2026-06-21'],
+    series: {
+      '2026-06-21': Array.from({ length: 4 }, () => ({
+        cloud: 0,
+        uv: 6,
+        rain: 0,
+        dewPoint: 20,
+        irradiance: { beam: 700, diffuse: 120 },
+      })),
+    },
+  };
+  const dry = structuredClone(humid);
+  for (const step of dry.series['2026-06-21']) step.dewPoint = -5;
+
+  const wet = setup({ forecast: humid, day: '2026-06-21' }).contextAt(735);
+  const arid = setup({ forecast: dry, day: '2026-06-21' }).contextAt(735);
+  assert.equal(wet.weather.dewPoint, 20);
+  assert.notEqual(wet.sky.directNormal, arid.sky.directNormal);
 });

@@ -136,8 +136,13 @@ export async function openApp(page, url, query = '') {
 }
 
 /** Itinéraire par la recherche de rue, comme un utilisateur. */
-export async function planRoute(page, from, to) {
+export async function planRoute(page, from, to, { fastest = true } = {}) {
   if (await page.isHidden('#route')) await page.click('#route-toggle');
+  // Par défaut le trajet le plus rapide : son tracé ne dépend que de la
+  // géométrie du réseau. Au curseur par défaut, il suit l'exposition calculée
+  // par le modèle — et un parcours de guidage cesserait de passer chaque fois
+  // qu'on affine la physique, alors qu'il n'éprouve pas la physique.
+  if (fastest) await page.evaluate(() => (document.getElementById('alpha').value = '0'));
   for (const [field, query] of [
     ['from', from],
     ['to', to],

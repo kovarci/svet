@@ -16,7 +16,7 @@
  * à « combien de lux exactement ».
  */
 
-import { clearSkyIlluminance, linkeFromBeam, perezSkyIndices } from './lib/sun.js';
+import { clearSkyIlluminance, clearSkyIrradiance, luminousEfficacy } from './lib/sun.js';
 import { skyDistribution } from './lib/sky.js';
 
 /**
@@ -92,17 +92,6 @@ export function wetnessFromRain(recentRainMm) {
 }
 
 /**
- * Efficacités lumineuses, en lumens par watt : de quoi convertir les flux
- * énergétiques du modèle météo en lux, la grandeur qui nous intéresse.
- *
- * Le ciel diffus est plus « efficace » que le faisceau direct parce qu'il est
- * plus bleu, donc plus proche du pic de sensibilité de l'œil. Valeurs usuelles
- * pour un ciel dégagé (Littlefair, 1985).
- */
-const BEAM_EFFICACY = 105;
-const DIFFUSE_EFFICACY = 120;
-
-/**
  * Atténuation par la couverture nuageuse.
  *
  * L'éclairement global suit la relation empirique de Kasten & Czeplak (1980),
@@ -116,36 +105,65 @@ const DIFFUSE_EFFICACY = 120;
  *
  * @param {number} altitude hauteur du soleil, en radians
  * @param {number} cloud couverture nuageuse, de 0 (ciel clair) à 1 (couvert)
+ * @param {{beam: number, diffuse: number}|null} irradiance flux du modèle météo,
+ *   faisceau normal et diffus horizontal, en W/m²
+ * @param {number|null} azimuth azimut du soleil, en radians
+ * @param {number} bins secteurs du profil d'horizon
+ * @param {object} [options]
+ * @param {number} [options.dayOfYear] jour de l'année : excentricité, trouble
+ * @param {number} [options.precipitableWater] eau précipitable, en cm
  */
-export function skyConditions(altitude, cloud = 0, irradiance = null, azimuth = null, bins = 16) {
+export function skyConditions(
+  altitude,
+  cloud = 0,
+  irradiance = null,
+  azimuth = null,
+  bins = 16,
+  { dayOfYear = 172, precipitableWater = 2 } = {},
+) {
   const sinH = Math.max(Math.sin(altitude), 0);
 
-  // Quand le modèle météo fournit directement les flux, on les prend : ils
-  // valent bien mieux qu'une déduction à partir de la nébulosité. Reste à
-  // passer des watts aux lux, ce que fait l'efficacité lumineuse — le faisceau
-  // direct est un peu moins « efficace » que la lumière du ciel, plus bleue.
-  if (irradiance && Number.isFinite(irradiance.beam)) {
-    const directNormal = Math.max(0, irradiance.beam) * BEAM_EFFICACY;
-    const diffuseHorizontal = Math.min(
-      MAX_DIFFUSE,
-      Math.max(0, irradiance.diffuse ?? 0) * DIFFUSE_EFFICACY,
-    );
-    const global = directNormal * sinH + diffuseHorizontal;
+  // Tout se calcule en watts, puis passe en lux par les efficacités de Perez,
+  // qui dépendent du ciel et de la hauteur du soleil : le faisceau rasant
+  // éclaire deux fois moins par watt que le faisceau de midi.
+  const toLux = (beamW, diffuseW, extra) => {
+    const k = luminousEfficacy(beamW, diffuseW, altitude, dayOfYear, precipitableWater);
+    const directNormal = beamW * k.beam;
+    const diffuseHorizontal = Math.min(MAX_DIFFUSE, diffuseW * k.diffuse);
     return withDistribution(
       {
         directNormal,
         diffuseHorizontal,
         sinH,
-        directShare: global > 0 ? (directNormal * sinH) / global : 0,
-        measured: true,
+        epsilon: k.epsilon,
+        brightness: k.brightness,
+        ...extra(directNormal, diffuseHorizontal),
       },
       altitude,
       azimuth,
       bins,
     );
+  };
+
+  // Quand le modèle météo fournit directement les flux, on les prend : ils
+  // valent bien mieux qu'une déduction à partir de la nébulosité.
+  if (irradiance && Number.isFinite(irradiance.beam)) {
+    return toLux(
+      Math.max(0, irradiance.beam),
+      Math.max(0, irradiance.diffuse ?? 0),
+      (directNormal, diffuseHorizontal) => {
+        const global = directNormal * sinH + diffuseHorizontal;
+        return {
+          directShare: global > 0 ? (directNormal * sinH) / global : 0,
+          // Sorties d'un modèle de prévision, pas des mesures — le nom est
+          // historique, et lu par l'affichage.
+          measured: true,
+        };
+      },
+    );
   }
 
-  const clear = clearSkyIlluminance(altitude);
+  const clear = clearSkyIrradiance(altitude, undefined, dayOfYear);
   const c = Math.max(0, Math.min(1, cloud));
 
   const globalClear = clear.directNormal * sinH + clear.diffuseHorizontal;
@@ -155,25 +173,13 @@ export function skyConditions(altitude, cloud = 0, irradiance = null, azimuth = 
   // à 50 % le disque solaire reste dégagé une bonne partie du temps. L'exposant
   // 1,5 corrige légèrement à la baisse — les nuages s'accumulent plus volontiers
   // autour du soleil qu'ailleurs.
-  const directNormal = clear.directNormal * Math.pow(1 - c, 1.5);
+  const beam = clear.directNormal * Math.pow(1 - c, 1.5);
+  const diffuse = Math.max(0, globalCloudy - beam * sinH);
 
-  // Le reste du global part en diffus, plafonné : sous ciel voilé lumineux on
-  // mesure jusqu'à ~45 000 lux d'éclairement diffus horizontal, jamais plus.
-  const diffuseHorizontal = Math.min(MAX_DIFFUSE, Math.max(0, globalCloudy - directNormal * sinH));
-
-  return withDistribution(
-    {
-      directNormal,
-      diffuseHorizontal,
-      sinH,
-      /** Part de la lumière qui reste directionnelle : 1 par ciel clair, 0 sous la couche. */
-      directShare: globalClear > 0 ? (directNormal * sinH) / globalClear : 0,
-      measured: false,
-    },
-    altitude,
-    azimuth,
-    bins,
-  );
+  // Part de la lumière qui reste directionnelle : 1 par ciel clair, 0 sous la
+  // couche — rapportée au global *clair*, en watts.
+  const directShare = globalClear > 0 ? (beam * sinH) / globalClear : 0;
+  return toLux(beam, diffuse, () => ({ directShare, measured: false }));
 }
 
 /**
@@ -189,21 +195,12 @@ export function skyConditions(altitude, cloud = 0, irradiance = null, azimuth = 
  * retombe sur le facteur de vue du ciel isotrope d'avant.
  */
 function withDistribution(sky, altitude, azimuth, bins) {
-  // Clarté de Perez : l'indice normalisé pour classer un ciel. Il remplace la
-  // part directionnelle, une grandeur maison qui confondait des ciels très
+  // Clarté de Perez (`sky.epsilon`, calculée en watts par l'appelant) :
+  // l'indice normalisé pour classer un ciel. Il remplace la part
+  // directionnelle, une grandeur maison qui confondait des ciels très
   // différents — un voile uniforme et des cumulus épars peuvent avoir la même
   // part directe moyenne et des distributions de luminance sans rapport.
-  const { epsilon, brightness } = perezSkyIndices(
-    sky.directNormal,
-    sky.diffuseHorizontal,
-    altitude,
-  );
-  sky.epsilon = epsilon;
-  sky.brightness = brightness;
-  // Le trouble du jour, lu à l'envers du faisceau mesuré. Sert au mode « ciel
-  // clair », qui devient ainsi la référence de *cette* atmosphère et non d'une
-  // moyenne annuelle.
-  if (sky.measured) sky.turbidity = linkeFromBeam(sky.directNormal, altitude);
+  const { epsilon } = sky;
 
   if (!Number.isFinite(azimuth)) return sky;
   // Le nombre de secteurs doit suivre celui du profil d'horizon stocké. S'il
