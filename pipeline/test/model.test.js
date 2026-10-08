@@ -35,7 +35,6 @@ import {
   PEREZ_BINS,
   DEG,
 } from '../src/lib/sun.js';
-import { skyDistribution, geometricSkyView, SKY_TYPES } from '../src/lib/sky.js';
 import {
   components,
   discomfortIndex,
@@ -204,126 +203,6 @@ test('sous l’horizon, le soleil direct ne contribue plus', () => {
   assert.equal(c.sun, 0);
 });
 
-// ──────────────────────────────────────────────── distribution du ciel ─────
-
-test('en site dégagé, le ciel anisotrope redonne exactement l’éclairement annoncé', () => {
-  // Propriété de calibrage : la distribution CIE redistribue la luminance, elle
-  // ne change pas le total. Sans elle, tout le modèle se décalerait en niveau.
-  const open = new Uint8Array(16);
-  for (const epsilon of [1, 1.3, 2, 4, 7]) {
-    for (const altitude of [5, 20, 60]) {
-      const d = skyDistribution({ altitude: altitude / DEG, azimuth: Math.PI, epsilon });
-      assert.ok(
-        Math.abs(d.factor(open) - 1) < 1e-9,
-        `ciel ouvert : facteur ${d.factor(open)} au lieu de 1 (ε ${epsilon}, ${altitude}°)`,
-      );
-    }
-  }
-});
-
-test('le type CIE de luminance uniforme redonne exactement le facteur de vue du ciel', () => {
-  // Le type 5 — gradation et indicatrice nulles — *est* l'hypothèse de l'ancien
-  // modèle. L'intégrale doit alors retomber sur cos²β, c'est-à-dire le SVF.
-  // C'est la preuve que la nouvelle physique contient l'ancienne comme cas
-  // particulier, et non qu'elle la remplace par autre chose.
-  assert.deepEqual(SKY_TYPES.uniform, { a: 0.0, b: -1.0, c: 0, d: -1.0, e: 0.0 });
-
-  // ε = 1,36 est l'ancre exacte du type uniforme : aucun mélange.
-  const uniform = skyDistribution({ altitude: 35 / DEG, azimuth: 200 / DEG, epsilon: 1.36 });
-  for (const wall of [0, 20, 45, 65]) {
-    const profile = new Uint8Array(16).fill(wall);
-    const svf = geometricSkyView(profile);
-    assert.ok(
-      Math.abs(uniform.factor(profile) - svf) < 0.005,
-      `murs à ${wall}° : ${uniform.factor(profile).toFixed(4)} contre un SVF de ${svf.toFixed(4)}`,
-    );
-  }
-});
-
-test('le ciel vu par une façade suit l’intégrale analytique du plan vertical', () => {
-  // Le modèle posait « un mur ne voit qu'un demi-ciel », 0,5 × E_diffus, pour
-  // tous les murs de toutes les rues. Exact pour un mur isolé sous ciel
-  // uniforme — et c'est ce cas qui sert d'ancrage.
-  //
-  // Sous ciel uniforme, un plan vertical dont le ciel est masqué en dessous de
-  // l'élévation β reçoit, rapporté à l'éclairement horizontal de ciel ouvert :
-  //
-  //     [ (π/2 − β)/2 − sin(2β)/4 ] · 2 / π
-  //
-  // On la retrouve, ce qui valide à la fois le changement de projection
-  // (cos Z devient sin Z · cos φ) et la normalisation croisée des deux tables.
-  const uniform = skyDistribution({ altitude: 35 / DEG, azimuth: 200 / DEG, epsilon: 1.36 });
-  const analytic = (betaDeg) => {
-    const beta = betaDeg / DEG;
-    return ((Math.PI / 2 - beta) / 2 - Math.sin(2 * beta) / 4) * (2 / Math.PI);
-  };
-
-  for (const beta of [0, 20, 40, 60, 80]) {
-    const found = uniform.wallFactor(0, beta);
-    assert.ok(
-      Math.abs(found - analytic(beta)) < 0.005,
-      `β=${beta}° : ${found.toFixed(4)} contre ${analytic(beta).toFixed(4)}`,
-    );
-  }
-
-  // Sans obstruction, tous les secteurs valent le demi-ciel historique.
-  for (let sector = 0; sector < 16; sector++) {
-    assert.ok(
-      Math.abs(uniform.wallFactor(sector, 0) - 0.5) < 0.006,
-      `secteur ${sector} : ${uniform.wallFactor(sector, 0).toFixed(4)}`,
-    );
-  }
-});
-
-test('par ciel clair, deux façades opposées ne reçoivent pas le même ciel', () => {
-  // Deux murs à l'ombre, l'un tourné vers la moitié lumineuse du ciel et l'autre
-  // à l'opposé : le ciel est tout ce qu'ils reçoivent, et le modèle leur donnait
-  // la même valeur.
-  const clear = skyDistribution({ altitude: 20 / DEG, azimuth: 120 / DEG, epsilon: 7 });
-  let brightest = 0;
-  let dimmest = Infinity;
-  for (let sector = 0; sector < 16; sector++) {
-    const f = clear.wallFactor(sector, 0);
-    brightest = Math.max(brightest, f);
-    dimmest = Math.min(dimmest, f);
-  }
-  assert.ok(brightest > dimmest * 2, `rapport ${(brightest / dimmest).toFixed(2)}`);
-  assert.ok(dimmest > 0, 'aucune façade ne reçoit rien du ciel');
-});
-
-test('le ciel anisotrope survit à un changement du nombre de secteurs', () => {
-  // Piège muet : `factor` refuse un profil dont la longueur ne correspond pas au
-  // nombre de secteurs de sa table, et le modèle retombe alors sur le facteur de
-  // vue du ciel isotrope — sans erreur, sans message, avec des couleurs
-  // plausibles et fausses. Porter les secteurs de 16 à 32 déclenchait exactement
-  // ça. Ce test échoue si le nombre de secteurs cesse d'être propagé.
-  for (const bins of [8, 16, 32]) {
-    const horizon = new Uint8Array(bins);
-    for (let i = 0; i < bins; i++) {
-      const azimuth = (i * 360) / bins;
-      horizon[i] = azimuth > 30 && azimuth < 210 ? 0 : 70;
-    }
-
-    const sky = skyConditions(25 / DEG, 0, { beam: 800, diffuse: 110 }, 120 / DEG, bins);
-    assert.ok(sky.distribution, `aucune distribution pour ${bins} secteurs`);
-
-    const reach = sky.distribution.factor(horizon);
-    assert.ok(
-      Number.isFinite(reach) && reach !== null,
-      `profil de ${bins} secteurs refusé par la distribution`,
-    );
-
-    // Le profil est ouvert vers le soleil : la lecture anisotrope doit dépasser
-    // nettement le facteur de vue du ciel géométrique. Si la table retombait en
-    // isotrope, les deux seraient égaux.
-    const svf = geometricSkyView(horizon);
-    assert.ok(
-      reach > svf * 1.2,
-      `${bins} secteurs : réception ${reach.toFixed(3)} contre SVF ${svf.toFixed(3)} — retombé en isotrope ?`,
-    );
-  }
-});
-
 test('la clarté de Perez classe les ciels dans le bon ordre', () => {
   // ε ≈ 1 sous la couche, > 6 par ciel bleu franc. C'est l'indice normalisé,
   // et il doit croître avec la part de faisceau direct.
@@ -433,48 +312,6 @@ test('l’éclairement de ciel clair en lux combine ESRA et Perez', () => {
   });
   near(lux.directNormal / 57559, 1, 0.002, 'faisceau à 20°, 21 juin');
   near(lux.diffuseHorizontal / 11021, 1, 0.002, 'diffus à 20°, 21 juin');
-});
-
-test('sous un ciel couvert, une ruelle reçoit plus que sa part géométrique', () => {
-  // Moon & Spencer : le zénith d'un ciel couvert vaut environ trois fois
-  // l'horizon. Une ruelle ne voit que le zénith — la partie la plus lumineuse —
-  // donc le facteur de vue du ciel la sous-estime. C'est l'erreur que la
-  // distribution corrige, et son signe n'est pas négociable.
-  const overcast = skyDistribution({ altitude: 30 / DEG, azimuth: Math.PI, epsilon: 1 });
-  for (const wall of [30, 50, 65]) {
-    const profile = new Uint8Array(16).fill(wall);
-    const svf = geometricSkyView(profile);
-    const reach = overcast.factor(profile);
-    assert.ok(
-      reach > svf,
-      `murs à ${wall}° : ${reach.toFixed(3)} devrait dépasser le SVF ${svf.toFixed(3)}`,
-    );
-    assert.ok(reach <= 1, `facteur hors bornes : ${reach}`);
-  }
-});
-
-test('par ciel clair, l’orientation compte à découpe de ciel égale', () => {
-  // Deux rues de même facteur de vue du ciel, l'une ouverte vers le soleil,
-  // l'autre à l'opposé. L'ancien modèle leur donnait la même valeur ; la région
-  // circumsolaire vaut jusqu'à onze fois le fond de ciel.
-  const towards = new Uint8Array(16);
-  const away = new Uint8Array(16);
-  for (let i = 0; i < 16; i++) {
-    const azimuth = (i * 360) / 16;
-    const east = azimuth > 30 && azimuth < 210;
-    towards[i] = east ? 0 : 70;
-    away[i] = east ? 70 : 0;
-  }
-  assert.ok(
-    Math.abs(geometricSkyView(towards) - geometricSkyView(away)) < 1e-9,
-    'les deux profils doivent avoir le même SVF, sinon le test ne prouve rien',
-  );
-
-  const clear = skyDistribution({ altitude: 25 / DEG, azimuth: 120 / DEG, epsilon: 7 });
-  assert.ok(
-    clear.factor(towards) > clear.factor(away) * 1.5,
-    `vers le soleil ${clear.factor(towards).toFixed(3)} contre ${clear.factor(away).toFixed(3)}`,
-  );
 });
 
 test('la masse d’air suit la sphéricité de l’atmosphère près de l’horizon', () => {

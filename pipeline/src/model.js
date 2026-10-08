@@ -208,7 +208,7 @@ function withDistribution(sky, altitude, azimuth, bins) {
   // le ciel isotrope : porter les secteurs de 16 à 32 aurait annulé en silence
   // toute l'anisotropie. C'est exactement le genre de panne muette que ce projet
   // a déjà payée.
-  sky.distribution = skyDistribution({ altitude, azimuth, epsilon, bins });
+  sky.distribution = skyDistribution({ altitude, azimuth, epsilon, delta: sky.brightness, bins });
   return sky;
 }
 
@@ -382,25 +382,35 @@ export function reverberation(horizon, altitude, azimuth, sky, albedo) {
     //
     // On posait « un mur ne voit qu'un demi-ciel », soit 0,5 × E_diffus, pour
     // tous les murs de toutes les rues. C'est vrai d'un mur isolé en plein
-    // champ ; dans une rue, le bâtiment d'en face lui en masque une bonne part,
-    // et l'éclairement des façades était donc **surestimé là où la rue est
-    // étroite** — exactement les rues qui comptent.
+    // champ ; dans une rue, le bâtiment d'en face lui en masque une bonne part.
     //
-    // Le mur d'en face, vu du pied de ce mur-ci, est deux fois moins haut en
-    // angle que vu du milieu de la rue : la distance double. Sa hauteur relevée
-    // dans le secteur opposé donne donc directement l'obstruction.
-    // Le mur d'en face, vu du pied de ce mur-ci, est deux fois moins haut en
-    // angle que vu du milieu de la rue : la distance double.
-    const oppositeBeta = (horizon[(i + (bins >> 1)) % bins] * Math.PI) / 180;
-    const seenFromWall = (Math.atan(Math.tan(oppositeBeta) / 2) * 180) / Math.PI;
-
-    // Le ciel réellement vu par ce mur, luminance comprise. À défaut de
-    // distribution — anciens appels — on retombe sur le demi-ciel uniforme
-    // corrigé de la seule obstruction.
-    const wallReach =
-      sky.distribution?.wallFactor(i, seenFromWall) ??
-      0.5 * Math.pow(Math.cos((seenFromWall * Math.PI) / 180), 2);
-    let irradiated = wallReach * sky.diffuseHorizontal;
+    // La correction suivante regardait le mur d'en face du **pied** de ce
+    // mur-ci, avec une obstruction uniforme sur tout le demi-tour d'azimut : un
+    // mur d'en face infiniment large. Or c'est une bande, et le haut d'une
+    // façade voit bien plus de ciel que son pied — c'est pourtant la façade
+    // entière que le piéton regarde. Contre une solution exacte de canyon
+    // infini, cette estimation était trop faible de 67 % en moyenne, d'un
+    // facteur 1,7 à 9 selon l'étroitesse de la rue : précisément les façades à
+    // l'ombre des rues étroites, où elles remplissent le champ de vision.
+    //
+    // `facadeSky` intègre la bande sur la hauteur de la façade. Deux noyaux : le
+    // plan horizontal à l'œil pour l'éclairement qui s'ajoute, le plan vertical
+    // pour la luminance de la façade vue de face. À défaut de distribution —
+    // anciens appels — on retombe sur le demi-ciel uniforme corrigé de la seule
+    // obstruction.
+    let skyHorizontal;
+    let skyVertical;
+    if (sky.distribution) {
+      skyHorizontal = sky.distribution.facadeSky(horizon, i, 'h');
+      skyVertical = sky.distribution.facadeSky(horizon, i, 'v');
+    } else {
+      const oppositeBeta = (horizon[(i + (bins >> 1)) % bins] * Math.PI) / 180;
+      const seenFromWall = Math.atan(Math.tan(oppositeBeta) / 2);
+      skyHorizontal = skyVertical = 0.5 * Math.pow(Math.cos(seenFromWall), 2);
+    }
+    const skyOnWall = skyHorizontal * sky.diffuseHorizontal;
+    const skyOnWallFace = skyVertical * sky.diffuseHorizontal;
+    let sunOnWall = 0;
 
     if (facing > 0 && altitude > 0) {
       const tanWall = Math.tan(beta);
@@ -423,17 +433,17 @@ export function reverberation(horizon, altitude, azimuth, sky, albedo) {
         tanWall > 0
           ? Math.max(0, Math.min(1, 1 - Math.max(0, tanSunSide - effectiveTanSun) / tanWall))
           : 0;
-      irradiated += sky.directNormal * Math.cos(altitude) * facing * sunlit;
+      sunOnWall = sky.directNormal * Math.cos(altitude) * facing * sunlit;
       sunlitWalls += share * sunlit;
     }
 
-    lux += share * albedo * irradiated;
+    lux += share * albedo * (skyOnWall + sunOnWall);
     // Luminance de la surface, en cd/m² : c'est *elle* qui éblouit, et non
     // l'éclairement horizontal qu'elle produit. Un mur à 7 000 cd/m² occupant
     // le tiers du champ de vision fait mal, même s'il n'ajoute que quelques
     // milliers de lux sur un plan horizontal — lequel regarde le ciel, pas le
     // mur.
-    weightedLuminance += share * ((albedo * irradiated) / Math.PI);
+    weightedLuminance += share * ((albedo * (skyOnWallFace + sunOnWall)) / Math.PI);
   }
 
   return {

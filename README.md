@@ -415,7 +415,7 @@ voit, pas ce qu'elle vaut en luminance. Longtemps le modèle s'en contentait,
 posant `diffus = svf × éclairement diffus` — c'est-à-dire un ciel de luminance
 uniforme. Ce n'est jamais le cas, et l'erreur n'est pas petite.
 
-### 3 bis. Le ciel n'est pas uniforme — ciel général normalisé CIE
+### 3 bis. Le ciel n'est pas uniforme — modèle de Perez 1993
 
 Sous un ciel **couvert**, le zénith vaut environ trois fois l'horizon (Moon &
 Spencer). Une ruelle ne voit qu'une bande de ciel autour du zénith : la partie la
@@ -427,39 +427,67 @@ l'horizon. Deux rues de même facteur de vue du ciel, l'une ouverte vers le
 soleil et l'autre à l'opposé, reçoivent des éclairements diffus très différents.
 L'ancien modèle leur donnait la même valeur, à la seconde près.
 
-On applique donc le **ciel général normalisé de la CIE** (ISO 15469:2004) :
+On applique donc le modèle de luminance **« tous temps » de Perez, Seals &
+Michalsky (1993)**, continu en clarté ε et en luminosité Δ :
 
 ```
-L(Z, χ) / L_z = [ φ(Z) · f(χ) ] / [ φ(0) · f(Z_s) ]
-
-gradation    φ(Z) = 1 + a · exp(b / cos Z)
-indicatrice  f(χ) = 1 + c · [exp(d·χ) − exp(d·π/2)] + e · cos²χ
+L(Z, χ) ∝ [ 1 + a · exp(b / cos Z) ] · [ 1 + c · exp(d·χ) + e · cos²χ ]
 ```
 
-et on l'intègre sur la portion de ciel **réellement visible**, lue dans le profil
-d'horizon de seize secteurs que le pipeline stocke déjà. Trois des quinze types
-normalisés suffisent à encadrer ce qu'on rencontre — couvert (type 1),
-intermédiaire (type 7), clair d'atmosphère polluée (type 12) — choisis en fondu
-d'après la part directionnelle de la lumière, jamais par palier.
+Z est l'angle zénithal de l'élément de ciel, χ sa distance au soleil ; (a, b, c,
+d, e) se lisent dans les tables de Perez selon (ε, Δ, hauteur du soleil). Les
+coefficients sont ceux de Radiance (`gendaylit`), contrôlés contre le binaire à
+5·10⁻⁷ près. On intègre sur la portion de ciel **réellement visible**, lue dans
+le profil d'horizon de trente-deux secteurs que le pipeline stocke déjà.
 
-Deux propriétés en font un raffinement strict plutôt qu'un remplacement :
+**Pourquoi pas les types de ciel CIE**, que ce paragraphe défendait : une
+première version en mélangeait huit des quinze, choisis par fondu sur ε.
+Confrontée à des flux mesurés (BSRN Payerne, juin 2016) et à l'intégration fine
+de la référence, elle sous-estimait de 19 % l'éclairement d'un plan vertical
+dégagé face au soleil (écart-type 25 %), et sa luminance zénithale dépassait de
+32 % celle de Perez 1990. Le défaut n'est pas la discrétisation, c'est la
+correspondance ε → type : elle retient des types intermédiaires sous 45° de
+soleil par ciel parfaitement clair. Avec Perez 1993 : biais +2 %, écart-type
+13 %, luminance zénithale −2,5 %. La référence du plan vertical est ici un
+modèle empirique de transposition ajusté sur des mesures inclinées, faute de
+scans de luminance du ciel mesurés.
+
+Trois propriétés en font un raffinement strict plutôt qu'un remplacement, et
+chacune est un test (`pipeline/test/sky.test.js`) :
 
 - en site dégagé, le facteur vaut **exactement 1** : le niveau annoncé par la
   météo n'est pas déplacé, seule la répartition l'est ;
-- pour un ciel de luminance uniforme, l'intégrale redonne **exactement cos²β**,
-  c'est-à-dire le facteur de vue du ciel d'avant.
+- pour un ciel de luminance uniforme, l'intégrale redonne **exactement cos²β**
+  (plan horizontal) et 0,5 (plan vertical dégagé), c'est-à-dire le facteur de
+  vue du ciel d'avant ; sur un canyon infini, le facteur d'Oke cos(atan(2H/W)) ;
+- les **secteurs sont centrés** : le pipeline tire le rayon du secteur s à
+  l'azimut sΔ, le secteur couvre [(s − ½)Δ, (s + ½)Δ]. La version précédente
+  intégrait [sΔ, (s+1)Δ] et décalait chaque obstacle d'un demi-pas — le miroir
+  d'une rue n'était pas une rue miroir.
 
-Aucun recalcul n'est nécessaire : le profil d'horizon était déjà là, on le lit
-mieux. Mesuré sur la zone « centre », 83 306 relevés de trottoir :
+**Les façades à l'ombre.** Le ciel que reçoit un mur dépend du bâtiment d'en
+face. Il était estimé du *pied* du mur, avec une obstruction uniforme sur tout le
+demi-tour d'azimut — un mur d'en face infiniment large. C'est une bande, qui
+décroît avec l'écart à la normale, et le haut d'une façade voit bien plus de ciel
+que son pied : c'est pourtant la façade entière que le piéton regarde. Contre une
+solution exacte de canyon infini, l'ancienne estimation était trop faible de
+67 % en moyenne — d'un facteur 1,7 à 9 selon l'étroitesse de la rue —
+précisément pour les façades à l'ombre des rues étroites, où elles remplissent
+le champ de vision. La lecture se fait maintenant en bande, intégrée sur la
+hauteur (quatre nœuds de Gauss-Legendre : 3 % d'écart contre l'intégration fine
+pour l'éclairement horizontal, 1 % pour le plan vertical). Le piéton y est
+toujours supposé au milieu de la rue.
 
-| Heure | Écart absolu moyen | Plus grand écart |
-|---|---|---|
-| 09 h | 1,6 pt | +11 pt |
-| 13 h | 1,9 pt | +14 pt, Port du Louvre (13 → 27) |
-| 19 h | 1,6 pt | +11 pt |
+Mesuré sur la zone « centre » avec la **version précédente** (83 306 relevés de
+trottoir), l'écart absolu moyen au ciel uniforme était de 1,6 à 1,9 point, le
+plus grand de +14 points au Port du Louvre. Ces chiffres ne valent plus pour le
+modèle actuel : les données de la zone n'étaient pas accessibles pour les
+refaire.
 
-Le quai du Louvre est exactement le cas visé : ouvert plein sud sur la Seine,
-donc droit sur le soleil, et noté comme une rue fermée par l'ancien modèle.
+**Ce qui n'est pas corrigé.** Les ciels sont validés contre des solutions
+analytiques et des modèles de référence, jamais contre des mesures de luminance
+dans une rue. Une personne au bord d'un trottoir, et non au milieu de la rue,
+voit une géométrie différente de celle que suppose la lecture des façades.
 
 ### 3 ter. Le sol manquait
 
@@ -655,10 +683,17 @@ le pire sens possible pour ce public.
 | 18:00 | 100 % | **0 klx** | **56,2 klx** | −100 % |
 
 Open-Meteo expose `direct_normal_irradiance` et `diffuse_radiation` en W/m² ; on
-les convertit en lux par l'efficacité lumineuse (105 lm/W pour le faisceau,
-120 pour le ciel diffus, plus bleu donc plus proche du pic de sensibilité de
-l'œil). Le bandeau indique « mesuré » quand ces flux sont disponibles. La
-déduction par Kasten & Czeplak ne sert plus que de repli hors ligne.
+les convertit en lux par les **efficacités lumineuses de Perez et al. (1990)**,
+qui dépendent de la hauteur du soleil, de la clarté du ciel et de l'eau
+précipitable tirée du point de rosée prévu. Le faisceau rasant éclaire moins par
+watt — environ 50 lm/W à 5° de hauteur, 103 à 60° — parce que son long trajet
+dans l'atmosphère lui retire le bleu et le vert ; le diffus d'un ciel clair, bleu,
+monte à 130-160 lm/W. Les 105 et 120 lm/W constants employés d'abord
+surestimaient le faisceau de 140 % entre 2 et 5° de hauteur et de 40 à 90 % entre
+5 et 15° — le régime même de l'éblouissement rasant. Le bandeau indique
+« mesuré » quand ces flux sont disponibles ; ce sont en réalité les sorties d'un
+modèle de prévision, pas des mesures. La déduction par Kasten & Czeplak ne sert
+plus que de repli hors ligne.
 
 La nébulosité ne se contente pas d'assombrir la carte : **elle en change le
 classement**. Sous un ciel couvert, éviter le soleil n'a plus de sens — mais une
@@ -1454,13 +1489,28 @@ Les précédentes portent sur les **données**. Celles-ci portent sur la
     **gappiness du houppier** (voir plus haut), qui dit *si* ça mouchette sans
     dire à quelle cadence. C'est la bonne grandeur observable ; la cadence reste
     hors de portée.
-14. **Le trouble de Linke n'est déduit que lorsque le faisceau est mesuré.**
-    Quand Open-Meteo fournit les flux, on le relit à l'envers de l'extinction
-    ESRA ; hors ligne, on retombe sur la valeur moyenne de 4.
-15. **Huit types de ciel CIE sur quinze.** La sélection suit désormais la clarté
-    de Perez, l'indice normalisé, et non plus une grandeur maison — mais la
-    luminosité Δ n'est pas encore employée, alors qu'elle distingue un couvert
-    clair d'un couvert d'orage à ε identique.
+14. **Le ciel clair hors ligne suit la climatologie, pas le ciel du jour.** Le
+    modèle ESRA complet (faisceau et diffus, en watts, excentricité de l'orbite)
+    prend le trouble de Linke mensuel de Paris (Remund et al. 2003, SoDa), de
+    2,65 en janvier à 3,7 en mai, au lieu du 4 constant d'avant. Sur les jours
+    clairs de Payerne en juin 2016, le trouble réel (2,7 à 4,0) s'écartait de la
+    climatologie du lieu (4,5) : un ciel clair hors ligne vaut ce que vaut la
+    climatologie, et le trouble de Paris n'a pas été confronté à des mesures
+    parisiennes. En mode prévision, le faisceau prévu fait foi. Avec le trouble
+    du jour, le faisceau ESRA colle aux mesures à 2 % près au-dessus de 10° ; le
+    diffus ESRA, lui, dépasse les mesures de 12 à 18 % — mieux que l'ancien
+    (−24 à −35 % entre 15 et 50°), pire au-dessus de 50° (+18 % contre −8 %).
+    Sous 5° de hauteur, rien n'a pu être validé : la station de mesure est
+    masquée par le relief.
+15. **Le plan horizontal n'est pas l'œil.** La composante de ciel et la
+    luminosité s'évaluent sur un plan horizontal. L'éclairement qui compte est
+    celui d'un plan **vertical** face à la marche : face à un soleil bas il vaut
+    1,5 à 5 fois l'éclairement horizontal, dos au soleil il en vaut un sixième à
+    un neuvième (canyon de rapport 1, soleil à 10°). `skyDistribution` sait déjà
+    le calculer (`vertical(profil, cap)`, vérifié contre l'intégrale exacte) ;
+    l'indice ne s'en sert pas encore, parce que ses poids et ses saturations ont
+    été calés sur la grandeur horizontale et qu'aucune mesure ne permet de les
+    recaler. C'est l'amélioration physique la plus importante qui reste.
 16. **Le feuillage suit désormais Beer-Lambert partout**, y compris pour le
     facteur de vue du ciel, qui employait une opacité fixe de 0,65 — saison et
     essence confondues. Reste que le houppier est un dôme déduit du tronc, pas
