@@ -24,7 +24,9 @@ export const ZONES = {
     // Emprise deux fois et demie plus grande : on relâche un peu la finesse
     // d'échantillonnage pour que le calcul reste sous le quart d'heure.
     sampleStep: 6,
-    svfAzimuths: 24,
+    // Autant de rayons que de secteurs d'horizon, au moins : à 24 pour 32, un
+    // secteur sur quatre ne recevait aucun rayon et restait à « ciel ouvert ».
+    svfAzimuths: 32,
   },
 
   // Paris intra-muros. ~44 M cellules à 2 m : compter ~10-20 min et 2-3 Go de RAM.

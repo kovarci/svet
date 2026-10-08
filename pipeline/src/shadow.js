@@ -143,7 +143,18 @@ export function skyViewFactor(grid, x, y, eyeZ, azimuths, radius, horizonBins = 
   const svf = svfBuilt - (svfBuilt - svfOpaqueTrees) * foliageOpacity;
 
   if (horizon) {
-    for (let i = 0; i < horizonBins; i++) horizon[i] /= Math.max(1, counts[i]);
+    // Un secteur que nul rayon n'a visé resterait à zéro — « aucun obstacle » —
+    // sans que rien ne le signale. La zone « centre » lançait 24 rayons pour 32
+    // secteurs : un secteur sur quatre vide, et dans une rue étroite un facteur
+    // de vue du ciel surestimé de 76 % en moyenne. On refuse plutôt que d'écrire.
+    const empty = Array.from(counts, (n, i) => (n === 0 ? i : -1)).filter((i) => i >= 0);
+    if (empty.length > 0) {
+      throw new Error(
+        `Profil d'horizon : ${azimuths} rayons ne suffisent pas pour ${horizonBins} secteurs ` +
+          `(secteurs sans rayon : ${empty.join(', ')}). Il faut au moins un rayon par secteur.`,
+      );
+    }
+    for (let i = 0; i < horizonBins; i++) horizon[i] /= counts[i];
   }
 
   return { svf, svfBuilt, canopyCover: Math.max(0, svfBuilt - svfOpaqueTrees), horizon };
