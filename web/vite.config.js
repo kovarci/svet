@@ -48,8 +48,28 @@ function dataNotFound() {
   };
 }
 
+/**
+ * Publie la liste des fichiers construits, que le service worker garde dès
+ * l'installation — voir `precache` dans `public/sw.js`. Sans elle, le code de
+ * l'application n'entrait au cache qu'à la deuxième visite.
+ */
+function precacheList() {
+  return {
+    name: 'svet-precache',
+    apply: 'build',
+    generateBundle(_, bundle) {
+      const files = Object.keys(bundle).filter((file) => !file.endsWith('.map'));
+      this.emitFile({
+        type: 'asset',
+        fileName: 'precache.json',
+        source: JSON.stringify(['manifest.webmanifest', ...files]),
+      });
+    },
+  };
+}
+
 export default defineConfig({
-  plugins: [dataNotFound()],
+  plugins: [dataNotFound(), precacheList()],
   // Les données calculées ne sont pas des sources : rien ne doit les surveiller.
   //
   // La pyramide régionale compte 118 643 tuiles. Confié au guetteur de Vite,

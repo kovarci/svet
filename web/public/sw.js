@@ -35,10 +35,46 @@ self.addEventListener('install', (event) => {
   event.waitUntil(
     caches
       .open(SHELL)
-      .then((cache) => cache.addAll(['./', './index.html']))
+      .then(async (cache) => {
+        await cache.addAll(['./', './index.html']);
+        await precache(cache);
+      })
       .then(() => self.skipWaiting()),
   );
 });
+
+/**
+ * Garde tout le code de l'application dès la première visite.
+ *
+ * La page d'accueil seule ne suffit pas : le script, la feuille de style et le
+ * worker de la carte n'entraient au cache qu'à la visite suivante, en passant
+ * par le service worker. Préparer un secteur puis partir aussitôt laissait,
+ * hors réseau, une coquille vide. La construction publie donc `precache.json`,
+ * la liste exacte de ses fichiers ; le serveur de développement n'en a pas, et
+ * l'installation s'en passe.
+ *
+ * Les noms portent une empreinte du contenu : ceux d'une version précédente ne
+ * seront plus jamais demandés. On les retire, sans quoi chaque mise en ligne
+ * ajouterait un mégaoctet que rien ne supprimerait.
+ */
+async function precache(cache) {
+  let files;
+  try {
+    const response = await fetch('./precache.json', { cache: 'no-cache' });
+    if (!response.ok) return;
+    files = await response.json();
+  } catch {
+    return;
+  }
+  await Promise.all(files.map((file) => cache.add(file).catch(() => {})));
+
+  const wanted = new Set(files.map((file) => new URL(file, self.location.href).href));
+  for (const request of await cache.keys()) {
+    if (new URL(request.url).pathname.includes('/assets/') && !wanted.has(request.url)) {
+      await cache.delete(request);
+    }
+  }
+}
 
 self.addEventListener('activate', (event) => {
   event.waitUntil(
@@ -135,7 +171,7 @@ async function prefetch(urls, port) {
       try {
         // On ne redemande pas ce qui est déjà là : préparer deux fois le même
         // secteur doit être instantané, pas coûter un second téléchargement.
-        const hit = await cache.match(url);
+        const hit = await cache.match(url, { ignoreVary: true });
         if (!hit) {
           const response = await fetch(url);
           // Un 404 est une réponse normale ici : la pyramide a de vrais trous,
@@ -164,7 +200,7 @@ async function prefetch(urls, port) {
 
 async function cacheFirst(request, cacheName, limit = 0) {
   const cache = await caches.open(cacheName);
-  const hit = await cache.match(request);
+  const hit = await cache.match(request, { ignoreVary: true });
   if (hit) return hit;
 
   try {
@@ -176,7 +212,7 @@ async function cacheFirst(request, cacheName, limit = 0) {
     }
     return response;
   } catch (error) {
-    const fallback = await cache.match(request, { ignoreSearch: true });
+    const fallback = await cache.match(request, { ignoreSearch: true, ignoreVary: true });
     if (fallback) return fallback;
     throw error;
   }
@@ -197,7 +233,7 @@ async function networkFirst(request, cacheName) {
     if (response.ok) putLatest(cache, request, response.clone());
     return response;
   } catch (error) {
-    const hit = await cache.match(request, { ignoreSearch: true });
+    const hit = await cache.match(request, { ignoreSearch: true, ignoreVary: true });
     if (hit) return hit;
     throw error;
   }
@@ -213,15 +249,26 @@ async function networkFirst(request, cacheName) {
  * marche — n'affichait plus que la page d'erreur du navigateur. La coquille est
  * la même quels que soient les paramètres ; c'est le script qui les lit.
  */
+/*
+ * `ignoreVary` partout : un serveur qui répond `Vary: Origin` — c'est le cas du
+ * serveur d'aperçu de Vite, et de nombreux hébergements — rend introuvable une
+ * réponse gardée sans en-tête `Origin` quand la page la redemande avec, ce que
+ * fait tout script chargé en `crossorigin`. Le code préchargé était bien dans
+ * le cache, et le service worker ne le trouvait pas. Les fichiers servis ici
+ * portent une version ou une empreinte dans leur adresse : deux réponses pour
+ * la même adresse sont la même.
+ */
 async function staleWhileRevalidate(request, cacheName) {
   const cache = await caches.open(cacheName);
-  const hit = await cache.match(request);
+  const hit = await cache.match(request, { ignoreVary: true });
   const network = fetch(request)
     .then((response) => {
       if (response.ok) putLatest(cache, request, response.clone());
       return response;
     })
-    .catch(async () => hit ?? (await cache.match(request, { ignoreSearch: true })));
+    .catch(
+      async () => hit ?? (await cache.match(request, { ignoreSearch: true, ignoreVary: true })),
+    );
   return hit ?? network;
 }
 

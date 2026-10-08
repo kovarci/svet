@@ -298,3 +298,40 @@ test(
     await context.close();
   },
 );
+
+test(
+  'après une seule visite, le code de l’application est disponible hors réseau',
+  { timeout: 180000 },
+  async () => {
+    // Une seule visite, sans rechargement : qui ouvre l'application puis part
+    // aussitôt. Le script, la feuille de style et le worker de la carte
+    // n'entraient au cache qu'à la visite suivante : hors réseau, il ne restait
+    // qu'une page blanche figée sur « Chargement des données… ».
+    const preview = await startPreviewServer(publicDir);
+    const context = await phoneContext(browser);
+    try {
+      const page = await context.newPage();
+      await page.goto(`${preview.url}?zone=synthese`);
+      await page.waitForFunction(() => navigator.serviceWorker?.controller, null, {
+        timeout: 60000,
+      });
+      await page.waitForTimeout(1000);
+      await preview.close();
+
+      const response = await page.goto(`${preview.url}?zone=synthese`);
+      assert.ok(response?.ok());
+      await page.waitForTimeout(2000);
+      const shown = await page.evaluate(() => ({
+        // Le script a tourné : il a remplacé le texte d'attente écrit dans la page.
+        loading: document.getElementById('loading').textContent.trim(),
+        // La feuille de style est appliquée : le fond est celui de l'application.
+        background: getComputedStyle(document.body).backgroundColor,
+      }));
+      assert.notEqual(shown.loading, 'Chargement des données…');
+      assert.equal(shown.background, 'rgb(11, 15, 22)');
+    } finally {
+      await context.close();
+      await preview.close().catch(() => {});
+    }
+  },
+);

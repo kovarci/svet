@@ -44,6 +44,12 @@ class MemoryCache {
     return this.find(request, options)[0]?.response.clone();
   }
 
+  async add(request) {
+    const response = await this.fetcher(MemoryCache.key(request).href);
+    if (!response.ok) throw new TypeError(`${response.status}`);
+    await this.put(request, response);
+  }
+
   async addAll(requests) {
     for (const request of requests) {
       await this.put(request, await this.fetcher(MemoryCache.key(request).href));
@@ -223,4 +229,42 @@ test('l’activation fait le ménage des copies laissées par les versions préc
     '/data/marais.data.bin?v=B',
     '/data/marais/16/1/2.pbf?v=A',
   ]);
+});
+
+test('dès la première visite, le code de l’application est gardé pour le hors-ligne', async () => {
+  // L'installation ne gardait que la page d'accueil. Le script, la feuille de
+  // style et le worker de la carte n'entraient au cache qu'à la visite
+  // suivante : préparer un secteur puis partir aussitôt laissait une coquille
+  // vide hors réseau. La construction publie la liste de ce qu'il faut garder.
+  const sw = boot();
+  const assets = [
+    'assets/index-abc.js',
+    'assets/index-abc.css',
+    'assets/maplibre-gl-worker-def.js',
+  ];
+  sw.network.files.set('/precache.json', JSON.stringify(assets));
+  for (const asset of assets) sw.network.files.set(`/${asset}`, `contenu de ${asset}`);
+  // Le script d'une version précédente, gardé lors d'une visite d'avant.
+  const shell = await (async () => {
+    await sw.dispatch('install');
+    return [...sw.stores.entries()].find(([name]) => name.endsWith('-shell'))[1];
+  })();
+  await shell.put(`${ORIGIN}/assets/index-ancien.js`, new Response('ancien'));
+  await sw.dispatch('install');
+  await sw.dispatch('activate');
+  assert.ok(!shell.paths().includes('/assets/index-ancien.js'), 'ancienne version gardée');
+
+  sw.network.online = false;
+  for (const asset of assets) {
+    const response = await sw.request(`/${asset}`);
+    assert.ok(response?.ok, `${asset} absent du cache`);
+  }
+});
+
+test('sans liste à précharger — serveur de développement —, l’installation aboutit quand même', async () => {
+  const sw = boot();
+  await sw.dispatch('install');
+  await sw.dispatch('activate');
+  sw.network.online = false;
+  assert.ok((await sw.request('/'))?.ok);
 });
