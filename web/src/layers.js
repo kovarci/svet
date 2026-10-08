@@ -94,6 +94,9 @@ export function tileTemplate() {
   return `${base}${path}${state.version}`;
 }
 
+/** Vrai une fois les écouteurs de la carte inscrits — voir la fin d'`addLayers`. */
+let mapEventsBound = false;
+
 export async function addLayers() {
   const { minZoom, maxZoom, bounds } = state.meta.tiles ?? { minZoom: 11, maxZoom: 16 };
 
@@ -268,6 +271,13 @@ export async function addLayers() {
       'circle-stroke-width': 2.5,
     },
   });
+
+  // La carte, elle, n'est créée qu'une fois : ses écouteurs aussi. Réinscrits à
+  // chaque chargement de zone, ils s'empilaient — au premier clic de « choisir
+  // sur la carte » après un changement de zone, un écouteur posait le point et
+  // quittait le mode choix, le suivant ouvrait en plus le détail de la rue.
+  if (mapEventsBound) return;
+  mapEventsBound = true;
 
   map.on('click', (event) => {
     if (state.picking) {

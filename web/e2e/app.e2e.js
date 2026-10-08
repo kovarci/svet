@@ -209,3 +209,45 @@ test(
     }
   },
 );
+
+test(
+  'après un changement de zone, un point choisi sur la carte n’ouvre pas en plus le détail de la rue',
+  { timeout: 120000 },
+  async () => {
+    // Chaque chargement de zone recrée les couches. Les écouteurs de la carte
+    // s'y réinscrivaient, et s'empilaient : au second clic de « choisir sur la
+    // carte », le premier écouteur posait le point et quittait le mode choix,
+    // le second — qui ne le voyait plus — ouvrait le panneau de la rue cliquée.
+    const context = await phoneContext(browser);
+    const page = await context.newPage();
+    await openApp(page, server.url, '?zone=synthese');
+    await page.click('#settings-toggle');
+    await page.selectOption('#zone', 'lente');
+    await page.waitForFunction(
+      () =>
+        window.svet.state.zoneKey === 'lente' &&
+        document.getElementById('loading').classList.contains('is-hidden'),
+    );
+    await page.waitForTimeout(1000);
+    if (await page.isVisible('#zone')) await page.click('#settings-toggle');
+
+    await page.click('#route-toggle');
+    await page.click('.pick[data-target="from"]');
+    // Un carrefour de la grille : le point tombe sur une rue, que le second
+    // écouteur aurait sélectionnée.
+    const point = await page.evaluate(() => {
+      const { map } = window.svet;
+      const { x, y } = map.project(map.getCenter());
+      return { x, y };
+    });
+    await page.mouse.click(point.x, point.y);
+    await page.waitForTimeout(500);
+
+    const result = await page.evaluate(() => ({
+      from: Boolean(window.svet.state.places.from),
+      panel: !document.getElementById('panel').hidden,
+    }));
+    assert.deepEqual(result, { from: true, panel: false });
+    await context.close();
+  },
+);
