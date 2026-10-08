@@ -170,7 +170,7 @@ export function bindPlaceFields() {
     // Les rues du réseau s'affichent à la frappe, sans attendre ; les adresses
     // arrivent après, et complètent la liste sans la remplacer.
     input.addEventListener('input', () => {
-      const local = searchLocal(currentStreets(), input.value);
+      const local = searchLocal(currentStreets(), input.value, 6, map.getCenter().toArray());
       showSuggestions(target, local);
       askAddresses(target, input.value, local);
     });
@@ -214,7 +214,7 @@ export function bindPlaceFields() {
         return;
       }
 
-      const local = searchLocal(currentStreets(), input.value);
+      const local = searchLocal(currentStreets(), input.value, 6, map.getCenter().toArray());
       if (local.length > 0) {
         setPlace(target, local[0]);
         return;

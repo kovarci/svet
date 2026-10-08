@@ -21,45 +21,140 @@ const NOMINATIM = 'https://nominatim.openstreetmap.org/search';
 const BAN = 'https://api-adresse.data.gouv.fr/search/';
 
 /**
+ * Deux morceaux de même nom plus proches que cela sont la même rue — coupée par
+ * une place, un carrefour mal relié, un bord de cellule. Plus loin, ce sont deux
+ * rues : « rue de la République » existe dans la moitié des communes de la
+ * région.
+ */
+const SAME_STREET_METERS = 300;
+
+/**
  * Index des noms de rue, avec un point représentatif.
  *
  * Il se construisait en parcourant la géométrie complète. Celle-ci étant
  * désormais tuilée, on passe par le graphe : chaque arête connaît son tronçon,
  * donc son nom, et porte des coordonnées de nœud. On obtient le même index
  * sans avoir à charger un octet de géométrie.
+ *
+ * Le point représentatif était la moyenne de tous les nœuds du nom. Deux
+ * défauts, l'un et l'autre silencieux : deux rues homonymes de deux communes
+ * devenaient un seul point, au milieu des champs entre elles ; et une rue
+ * coudée avait son point au creux du coude, dans l'îlot. On regroupe donc les
+ * morceaux de même nom qui se touchent ou se suivent de près, et chaque groupe
+ * prend pour point **son nœud le plus proche de sa moyenne** — un point de la
+ * rue elle-même.
  */
 export function indexStreetNames(data, graph) {
-  const byName = new Map();
-
+  const edgesByName = new Map();
   for (let i = 0; i < graph.edgeCount; i++) {
     const { name } = data.segmentAt(graph.edgeSegment[i]);
     if (!name) continue;
-    const node = graph.edgeA[i];
-    const entry = byName.get(name);
-    if (entry) {
-      entry.lonSum += graph.nodeLon[node];
-      entry.latSum += graph.nodeLat[node];
-      entry.count++;
-    } else {
-      byName.set(name, {
-        name,
-        lonSum: graph.nodeLon[node],
-        latSum: graph.nodeLat[node],
-        count: 1,
+    if (!edgesByName.has(name)) edgesByName.set(name, []);
+    edgesByName.get(name).push(i);
+  }
+
+  const entries = [];
+  for (const [name, edges] of edgesByName) {
+    for (const nodes of streetGroups(graph, edges)) {
+      let lon = 0;
+      let lat = 0;
+      for (const n of nodes) {
+        lon += graph.nodeLon[n];
+        lat += graph.nodeLat[n];
+      }
+      lon /= nodes.length;
+      lat /= nodes.length;
+      let best = nodes[0];
+      let bestDistance = Infinity;
+      for (const n of nodes) {
+        const d = meters(lon, lat, graph.nodeLon[n], graph.nodeLat[n]);
+        if (d < bestDistance) {
+          bestDistance = d;
+          best = n;
+        }
+      }
+      entries.push({
+        label: name,
+        lon: graph.nodeLon[best],
+        lat: graph.nodeLat[best],
+        source: 'réseau',
       });
     }
   }
-
-  return [...byName.values()].map((entry) => ({
-    label: entry.name,
-    lon: entry.lonSum / entry.count,
-    lat: entry.latSum / entry.count,
-    source: 'réseau',
-  }));
+  return entries;
 }
 
-/** Recherche immédiate dans les noms de rue, sans accents ni casse. */
-export function searchLocal(streets, query, limit = 6) {
+/**
+ * Les nœuds d'un nom, regroupés en rues : morceaux connexes d'abord, puis
+ * morceaux voisins de moins de `SAME_STREET_METERS` réunis.
+ */
+function streetGroups(graph, edges) {
+  // Morceaux connexes : union des deux bouts de chaque arête.
+  const parent = new Map();
+  const find = (n) => {
+    while (parent.get(n) !== n) {
+      parent.set(n, parent.get(parent.get(n)));
+      n = parent.get(n);
+    }
+    return n;
+  };
+  for (const e of edges) {
+    for (const n of [graph.edgeA[e], graph.edgeB[e]]) if (!parent.has(n)) parent.set(n, n);
+    const [a, b] = [find(graph.edgeA[e]), find(graph.edgeB[e])];
+    if (a !== b) parent.set(a, b);
+  }
+  const pieces = new Map();
+  for (const n of parent.keys()) {
+    const root = find(n);
+    if (!pieces.has(root)) pieces.set(root, []);
+    pieces.get(root).push(n);
+  }
+
+  // Morceaux proches : réunis de proche en proche, jusqu'à ce que plus rien ne bouge.
+  const groups = [...pieces.values()];
+  let merged = true;
+  while (merged && groups.length > 1) {
+    merged = false;
+    outer: for (let i = 0; i < groups.length; i++) {
+      for (let j = i + 1; j < groups.length; j++) {
+        if (closest(graph, groups[i], groups[j]) < SAME_STREET_METERS) {
+          groups[i] = groups[i].concat(groups[j]);
+          groups.splice(j, 1);
+          merged = true;
+          break outer;
+        }
+      }
+    }
+  }
+  return groups;
+}
+
+function closest(graph, a, b) {
+  let best = Infinity;
+  for (const m of a) {
+    for (const n of b) {
+      const d = meters(graph.nodeLon[m], graph.nodeLat[m], graph.nodeLon[n], graph.nodeLat[n]);
+      if (d < best) best = d;
+    }
+  }
+  return best;
+}
+
+function meters(lon1, lat1, lon2, lat2) {
+  const midLat = (((lat1 + lat2) / 2) * Math.PI) / 180;
+  return Math.hypot((lon2 - lon1) * 111320 * Math.cos(midLat), (lat2 - lat1) * 111132);
+}
+
+/**
+ * Recherche immédiate dans les noms de rue, sans accents ni casse.
+ *
+ * Des homonymes — la même rue dans deux communes — se distinguent par leur
+ * distance au centre de la carte, le plus proche d'abord : sans cela, deux
+ * lignes identiques laissaient choisir au hasard.
+ *
+ * @param {number[]} [center] `[lon, lat]` du centre de la carte
+ */
+export function searchLocal(streets, query, limit = 6, center = null) {
   const needle = normalize(query);
   if (needle.length < 2) return [];
 
@@ -72,8 +167,22 @@ export function searchLocal(streets, query, limit = 6) {
     scored.push({ street, score: at === 0 ? 0 : 1, length: haystack.length });
   }
 
-  scored.sort((a, b) => a.score - b.score || a.length - b.length);
-  return scored.slice(0, limit).map((s) => s.street);
+  const distance = (street) => (center ? meters(center[0], center[1], street.lon, street.lat) : 0);
+  scored.sort(
+    (a, b) => a.score - b.score || a.length - b.length || distance(a.street) - distance(b.street),
+  );
+  const found = scored.slice(0, limit).map((s) => s.street);
+
+  const count = new Map();
+  for (const street of found) count.set(street.label, (count.get(street.label) ?? 0) + 1);
+  return found.map((street) =>
+    count.get(street.label) > 1 && center
+      ? {
+          ...street,
+          source: `${street.source} · à ${(distance(street) / 1000).toFixed(1).replace('.', ',')} km`,
+        }
+      : street,
+  );
 }
 
 /**
@@ -111,6 +220,9 @@ export async function searchAddresses(query, { center, bbox, limit = 5, signal }
   return features
     .map((feature) => ({
       label: feature.properties.label,
+      // Le nom de voie seul, sans code postal ni commune : c'est lui qui dit si
+      // la réponse désigne une rue déjà proposée par le réseau.
+      name: feature.properties.name,
       lon: feature.geometry.coordinates[0],
       lat: feature.geometry.coordinates[1],
       // « adresse », « rue », « commune » : le rang de la réponse dit ce qu'on
@@ -137,13 +249,26 @@ function inside(item, bbox) {
  * hors ligne, et certaines d'être calculées. Une adresse de la BAN qui désigne
  * une voie déjà proposée n'apporte rien de plus — sauf si elle porte un numéro,
  * qui est justement ce qu'on est venu chercher.
+ *
+ * Le doublon se reconnaît au **nom de voie** de la BAN, pas à son libellé : le
+ * libellé porte le code postal et la commune (« Rue de Rivoli 75001 Paris »),
+ * et ne ressemblait donc jamais au nom du réseau — la même rue revenait deux
+ * fois. Encore faut-il qu'elle soit au même endroit : une homonyme d'une autre
+ * commune reste proposée.
  */
 export function mergeSuggestions(local, remote, limit = 7) {
   const seen = new Set(local.map((item) => normalize(item.label)));
   const merged = [...local];
+  const sameStreet = (item) =>
+    item.name &&
+    local.some(
+      (street) =>
+        normalize(street.label) === normalize(item.name) &&
+        meters(street.lon, street.lat, item.lon, item.lat) < 1000,
+    );
   for (const item of remote) {
     const key = normalize(item.label);
-    if (seen.has(key)) continue;
+    if (seen.has(key) || sameStreet(item)) continue;
     seen.add(key);
     merged.push(item);
   }
