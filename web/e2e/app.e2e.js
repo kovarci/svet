@@ -90,11 +90,20 @@ test(
 
     const said = await page.evaluate(() => window.__said);
     const turns = said.filter((s) => /tournez/i.test(s));
-    assert.deepEqual(
-      turns.map((s) => s.split(',')[0]),
-      ['Dans 200 mètres', 'Dans 60 mètres', 'Tournez à droite'],
-    );
-    assert.ok(said.includes('Dans 200 mètres, arrivée à destination.'));
+    // Chaque virage s'annonce à 200 m, à 60 m, puis au moment de tourner — et
+    // dans la même direction aux trois paliers.
+    assert.ok(turns.length >= 3 && turns.length % 3 === 0, turns.join(' / '));
+    for (let k = 0; k < turns.length; k += 3) {
+      const [far, near, now] = turns.slice(k, k + 3);
+      assert.match(far, /^Dans 200 mètres, tournez à (gauche|droite)/);
+      assert.match(near, /^Dans 60 mètres, tournez à (gauche|droite)/);
+      assert.match(now, /^Tournez à (gauche|droite)/);
+      const side = (text) => text.match(/(gauche|droite)/)[1];
+      assert.equal(side(far), side(now));
+      assert.equal(side(near), side(now));
+    }
+    // L'arrivée s'annonce avant d'y être, au palier que permet le dernier tronçon.
+    assert.ok(said.some((s) => /^Dans \d+ mètres, arrivée à destination\.$/.test(s)));
     assert.equal(said.filter((s) => s === 'Vous êtes arrivé.').length, 1);
     assert.ok(!said.some((s) => /undefined|null/.test(s)), said.join(' / '));
 
