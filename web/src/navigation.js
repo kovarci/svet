@@ -260,6 +260,54 @@ export function advanceProgress(previous, measured, { allowBack = 25 } = {}) {
   return measured > previous || previous - measured > allowBack ? measured : previous;
 }
 
+/**
+ * Décide quand un écart devient un recalcul automatique.
+ *
+ * Le bouton « Recalculer depuis ici » reste, mais on ne marche pas en regardant
+ * l'écran : il faut que l'application s'en charge. Le danger est inverse — un
+ * recalcul sur un simple écart de GPS, ou en boucle tant que le nouveau tracé
+ * n'est pas posé, remplacerait l'itinéraire sous les pieds. Trois garde-fous :
+ *
+ *  - l'écart doit **dépasser l'incertitude** de la position (un fix à ± 80 m
+ *    ne prouve rien à 60 m) ;
+ *  - il doit **durer** : au moins `minFixes` mesures sur `sustainMs`, pour
+ *    laisser contourner un obstacle ou traverser une place ;
+ *  - un **délai de garde** sépare deux recalculs.
+ *
+ * Fonction d'état pure : l'horloge est passée en argument, donc rejouable.
+ */
+export function createRerouteGuard({
+  meters = OFF_ROUTE_METERS,
+  sustainMs = 12000,
+  minFixes = 3,
+  cooldownMs = 45000,
+} = {}) {
+  let since = null;
+  let fixes = 0;
+  let last = -Infinity;
+
+  return {
+    observe({ offset, accuracy = 0, time }) {
+      if (!(offset > Math.max(meters, accuracy))) {
+        since = null;
+        fixes = 0;
+        return false;
+      }
+      if (since === null) since = time;
+      fixes++;
+      if (fixes < minFixes || time - since < sustainMs || time - last < cooldownMs) return false;
+      last = time;
+      since = null;
+      fixes = 0;
+      return true;
+    },
+    reset() {
+      since = null;
+      fixes = 0;
+    },
+  };
+}
+
 /** Prochaine manœuvre à annoncer, et distance qui en sépare. */
 export function nextManoeuvre(instructions, distanceAlong) {
   for (const instruction of instructions) {

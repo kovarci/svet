@@ -36,6 +36,7 @@ import {
   advanceProgress,
   bearingBetween,
   buildInstructions,
+  createRerouteGuard,
   describeManoeuvre,
   nextManoeuvre,
   snapToRoute,
@@ -2098,6 +2099,8 @@ function startNavigation() {
     hint: null,
     following: true,
     offRoute: false,
+    guard: createRerouteGuard(),
+    rerouting: false,
     watchId: null,
     lastFix: null,
   };
@@ -2185,6 +2188,9 @@ function onPosition(position) {
   const fix = snapToRoute(state.route, longitude, latitude, state.nav.hint);
   state.nav.hint = fix.index;
   state.nav.offRoute = fix.offset > OFF_ROUTE_METERS;
+  if (state.nav.guard.observe({ offset: fix.offset, accuracy, time: Date.now() })) {
+    rerouteFromHere();
+  }
 
   // Progression forcée monotone — la règle et son pourquoi sont dans
   // `advanceProgress`, où elles s'éprouvent sans capteur.
@@ -2230,6 +2236,42 @@ function onPosition(position) {
   }
 
   renderNavigation(fix, accuracy);
+}
+
+/**
+ * Recalcule depuis la position courante **sans quitter le guidage**.
+ *
+ * Le bouton manuel arrête tout et rouvre le panneau : bien pour celui qui
+ * regarde l'écran, pas pour celui qui marche. Ici le guidage continue sur
+ * l'ancien tracé jusqu'à ce que le nouveau soit prêt ; si la recherche échoue,
+ * on n'a rien remplacé et le bouton manuel reste affiché.
+ */
+async function rerouteFromHere() {
+  const nav = state.nav;
+  if (!nav?.lastFix || nav.rerouting) return;
+  nav.rerouting = true;
+  const previous = state.route;
+  voice.speak('Recalcul de l’itinéraire.', { interrupt: true });
+  try {
+    setPlace('from', { label: 'Ma position', lon: nav.lastFix[0], lat: nav.lastFix[1] });
+    await computeRoute();
+  } catch {
+    // On garde l'ancien tracé ; le bouton « Recalculer depuis ici » demeure.
+  } finally {
+    nav.rerouting = false;
+  }
+  if (state.nav !== nav || state.route === previous) return;
+
+  nav.instructions = buildInstructions(state.route);
+  nav.transitions = transitions(state.route);
+  nav.warnedTransitions = new Set();
+  nav.hint = null;
+  nav.progress = null;
+  nav.offRoute = false;
+  nav.warnedOffRoute = false;
+  nav.guard.reset();
+  voice.reset();
+  voice.speak('Nouvel itinéraire.');
 }
 
 function onPositionError(error) {

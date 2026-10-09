@@ -19,6 +19,7 @@ import {
   angleDifference,
   bearingBetween,
   buildInstructions,
+  createRerouteGuard,
   describeManoeuvre,
   distance,
   nextManoeuvre,
@@ -223,4 +224,61 @@ test('la distance plane vaut la distance réelle à quelques mètres près', () 
   // Un degré de latitude fait 111,1 km ; on vérifie qu'on ne s'est pas trompé
   // d'ordre de grandeur, ce qui fausserait toutes les annonces.
   assert.ok(Math.abs(distance([2.35, 48.85], [2.35, 48.86]) - 1111) < 15);
+});
+
+// ------------------------------------------------------- recalcul automatique
+
+test('un écart passager ne déclenche pas le recalcul : on a pu contourner un obstacle', () => {
+  const guard = createRerouteGuard();
+  assert.equal(guard.observe({ offset: 60, accuracy: 8, time: 0 }), false);
+  assert.equal(guard.observe({ offset: 62, accuracy: 8, time: 4000 }), false);
+  // retour sur le tracé : la série repart de zéro
+  assert.equal(guard.observe({ offset: 5, accuracy: 8, time: 8000 }), false);
+  assert.equal(guard.observe({ offset: 60, accuracy: 8, time: 12000 }), false);
+  assert.equal(guard.observe({ offset: 60, accuracy: 8, time: 16000 }), false);
+});
+
+test('un écart soutenu déclenche le recalcul, une seule fois', () => {
+  const guard = createRerouteGuard();
+  const fired = [];
+  for (let t = 0; t <= 30000; t += 3000) {
+    fired.push(guard.observe({ offset: 70, accuracy: 8, time: t }));
+  }
+  assert.equal(fired.filter(Boolean).length, 1);
+  // pas avant la durée requise
+  assert.ok(fired.findIndex(Boolean) * 3000 >= 12000);
+});
+
+test("une position imprécise n'est pas un écart : sous 80 m d'incertitude, 60 m ne prouvent rien", () => {
+  const guard = createRerouteGuard();
+  for (let t = 0; t <= 60000; t += 3000) {
+    assert.equal(guard.observe({ offset: 60, accuracy: 80, time: t }), false);
+  }
+});
+
+test('après un recalcul, le délai de garde évite de recalculer en boucle', () => {
+  const guard = createRerouteGuard({ cooldownMs: 45000 });
+  let first = null;
+  for (let t = 0; t <= 20000 && first === null; t += 3000) {
+    if (guard.observe({ offset: 70, accuracy: 8, time: t })) first = t;
+  }
+  assert.notEqual(first, null);
+  // toujours écarté juste après (le nouveau tracé n'est pas encore posé) : silence
+  for (let t = first + 3000; t < first + 45000; t += 3000) {
+    assert.equal(guard.observe({ offset: 70, accuracy: 8, time: t }), false);
+  }
+  // le délai écoulé, un écart soutenu redéclenche
+  let again = false;
+  for (let t = first + 45000; t <= first + 70000; t += 3000) {
+    again ||= guard.observe({ offset: 70, accuracy: 8, time: t });
+  }
+  assert.equal(again, true);
+});
+
+test('reset() efface la série en cours : un nouvel itinéraire repart propre', () => {
+  const guard = createRerouteGuard();
+  guard.observe({ offset: 70, accuracy: 8, time: 0 });
+  guard.observe({ offset: 70, accuracy: 8, time: 6000 });
+  guard.reset();
+  assert.equal(guard.observe({ offset: 70, accuracy: 8, time: 13000 }), false);
 });
