@@ -70,6 +70,8 @@ l'écran, c'est-à-dire où l'on a le moins de moyens de vérifier. Ce qui est
 | `routing.js` | la pondération qui ne change plus rien, l'heure de passage qui n'avance pas, un réseau exposé qui devient infranchissable |
 | `navigation.js` | le recalage qui saute sur le brin d'en face, le bruit GPS qui fait reculer la progression, le trottoir qui alterne à chaque tronçon |
 | `cells.js` | la couture des graphes régionaux, sans laquelle le réseau est coupé à chaque bord de cellule |
+| `navigation.js` (recalcul) | un écart de GPS qui remplace l'itinéraire, ou un recalcul en boucle |
+| `labels.js` | un curseur que le lecteur d'écran annonce « 510 » au lieu de « 8 h 30 » |
 | `link.js` | un lien d'itinéraire qui ne rend pas ce qu'on y a mis |
 | `offline.js` | un pavage décalé, et l'on prépare le quartier d'à côté |
 
@@ -1044,7 +1046,17 @@ l'exposition à l'endroit précis où l'on se trouve, pas la moyenne du trajet.
 
 La carte s'oriente dans le sens de la marche et suit la position ; toucher la
 carte rend la main, le bouton **Suivre** la reprend. Au-delà de 35 m du tracé,
-l'application propose de recalculer depuis la position courante.
+l'application le dit, et le bouton « Recalculer depuis ici » s'affiche.
+
+Quand l'écart **dure**, elle recalcule d'elle-même, sans quitter le guidage —
+on ne marche pas en regardant l'écran. Le déclenchement
+(`createRerouteGuard`) exige trois garde-fous, parce qu'un recalcul à tort
+remplace l'itinéraire sous les pieds : l'écart doit dépasser l'**incertitude** de
+la position (à ± 80 m, 60 m d'écart ne prouvent rien), tenir sur au moins trois
+mesures et douze secondes (un obstacle contourné n'est pas un égarement), et un
+délai de 45 s sépare deux recalculs. L'ancien tracé reste actif jusqu'à ce que le
+nouveau soit prêt ; si la recherche échoue, rien n'est remplacé et le bouton
+manuel demeure.
 
 Trois détails ont demandé une correction, chacun invisible en théorie et
 flagrant à l'usage :

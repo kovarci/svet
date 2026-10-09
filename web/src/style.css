@@ -78,6 +78,29 @@
 }
 
 /**
+ * Contraste forcé (Windows) : le navigateur impose ses couleurs et ignore les
+ * fonds. Les contours que les boutons tiennent de leur fond disparaîtraient,
+ * et le focus avec eux.
+ */
+@media (forced-colors: active) {
+  button,
+  select,
+  input {
+    border: 1px solid ButtonText;
+  }
+  button:focus-visible,
+  select:focus-visible,
+  input:focus-visible {
+    outline: 2px solid Highlight;
+    outline-offset: 2px;
+  }
+  [aria-pressed='true'],
+  .is-on {
+    outline: 2px solid Highlight;
+  }
+}
+
+/**
  * Le voile. `pointer-events: none` pour qu'il n'intercepte aucun geste, et une
  * couche au-dessus de tout le reste pour qu'il assombrisse aussi la carte.
  */

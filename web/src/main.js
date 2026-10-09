@@ -30,6 +30,7 @@ import {
   prefetch,
   tilesInBounds,
 } from './offline.js';
+import { alphaLabel, spokenClock } from './labels.js';
 import { createVoice, phraseFor } from './speech.js';
 import {
   OFF_ROUTE_METERS,
@@ -1376,6 +1377,7 @@ function applyTime() {
   const night = altitudeDeg <= 0;
 
   dom.clock.textContent = formatClock(state.minutes);
+  dom.time.setAttribute('aria-valuetext', spokenClock(state.minutes));
   dom.sunInfo.textContent = night
     ? `nuit — ${moonLabel(state.minutes)}`
     : `soleil ${altitudeDeg.toFixed(0)}° · azimut ${(context.sun.azimuth * DEG).toFixed(0)}°`;
@@ -2520,7 +2522,10 @@ async function restoreRouteFromUrl() {
   const wanted = readRoute(location.href);
   if (!wanted.from || !wanted.to) return;
 
-  if (wanted.alpha !== null) dom.alpha.value = String(wanted.alpha);
+  if (wanted.alpha !== null) {
+    dom.alpha.value = String(wanted.alpha);
+    dom.alpha.setAttribute('aria-valuetext', alphaLabel(wanted.alpha));
+  }
   setPlace('from', wanted.from);
   setPlace('to', wanted.to);
   setRoutePanel(true);
@@ -3118,6 +3123,9 @@ function bindControls() {
     dom.navFollow.classList.remove('is-on');
     dom.navFollow.setAttribute('aria-pressed', 'false');
   });
+  const describeAlpha = () => dom.alpha.setAttribute('aria-valuetext', alphaLabel(dom.alpha.value));
+  describeAlpha();
+  dom.alpha.addEventListener('input', describeAlpha);
   dom.alpha.addEventListener('change', () => {
     if (state.route) computeRoute().catch(fail);
   });
