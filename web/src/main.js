@@ -3,7 +3,7 @@ import 'maplibre-gl/dist/maplibre-gl.css';
 import './style.css';
 
 import { createShadowLayer } from './shadows.js';
-import { CLEAR_SKY, fetchForecast, skyLabel } from './weather.js';
+import { CLEAR_SKY, fetchForecast, forecastDays, skyLabel } from './weather.js';
 import {
   prepareGraph,
   findRoute,
@@ -41,6 +41,7 @@ import {
   snapToRoute,
 } from './navigation.js';
 import {
+  CARDINALS,
   components,
   discomfortIndex,
   localUV,
@@ -48,6 +49,7 @@ import {
   skyConditions,
   uvLabel,
   wetnessFromRain,
+  LEGACY_VEIL_SCALE,
 } from '@svet/pipeline/model';
 import { applyRefraction, localToUTC, sunPosition, DEG } from '@svet/pipeline/sun';
 
@@ -77,7 +79,12 @@ const MODES = {
   index: {
     label: 'Indice global',
     max: 100,
-    note: 'Les six composantes réunies et pondérées ; la nuit, l’éclairage public prend le relais.',
+    note: 'Lumière reçue à l’œil, sources éblouissantes et scintillement réunis ; la nuit, l’éclairage public prend le relais.',
+  },
+  dose: {
+    label: 'Lumière à l’œil',
+    max: 100,
+    note: 'Lumière qui entre dans l’œil en regardant devant soi, cônes et mélanopsine réunis, sur une échelle logarithmique partant du seuil d’inconfort des personnes migraineuses.',
   },
   sun: {
     label: 'Soleil direct',
@@ -99,7 +106,7 @@ const MODES = {
     // d'itinéraire évalue chaque tronçon dans le sens réellement parcouru. Sans
     // cette phrase, la même rue portait deux chiffres différents selon
     // l'endroit où on la lisait, sans que rien ne l'explique.
-    note: 'Soleil assez bas pour arriver dans l’axe du regard, compté de face — l’itinéraire, lui, tient compte de votre sens de marche.',
+    note: 'Soleil et reflets du soleil — vitres, chaussée mouillée — dans le champ visuel, comptés dans le pire des deux sens de la rue ; l’itinéraire, lui, tient compte de votre sens de marche.',
   },
   flicker: {
     label: 'Scintillement',
@@ -220,6 +227,11 @@ const state = {
    */
   graph: null,
   streets: null,
+  /**
+   * Prévision de la zone qui l'a demandée : `{meta, dates, series, note}`.
+   * `note` dit pourquoi le ciel reste clair quand `dates` est vide. Ne la lire
+   * que par `zoneForecast()`, qui refuse celle d'une autre zone.
+   */
   forecast: null,
   /** Heure affichée, en minutes depuis minuit — continue, pas un indice de pas. */
   minutes: 780,
@@ -701,30 +713,105 @@ function reportProgress(token, received, total) {
       : `Chargement des données… ${megabytes.toFixed(1)} Mo`;
 }
 
+/**
+ * Charge la prévision d'une zone — seulement pour les jours dont le soleil est
+ * celui de ses ombres.
+ *
+ * Les jours trop éloignés de la date du calcul ne sont même pas demandés : la
+ * carte reste en ciel clair, et le bandeau dit pourquoi. Sans ce tri, une zone
+ * vieille de deux mois recevait la météo du jour sous un soleil d'une autre
+ * saison (voir `DRIFT_TOLERANCE`).
+ */
 async function loadForecast(meta) {
-  dom.skyInfo.textContent = 'météo…';
-  try {
-    // La prévision part d'aujourd'hui, jamais de la date du calcul : celle-ci
-    // peut dater de la veille, et proposer par défaut la météo d'hier n'a aucun
-    // sens pour quelqu'un qui prépare une sortie. La géométrie des ombres, elle,
-    // reste celle du calcul — c'est ce qui borne l'horizon à trois jours.
-    const today = new Date().toISOString().slice(0, 10);
-    state.forecast = await fetchForecast({
-      center: meta.center,
-      date: meta.date > today ? meta.date : today,
-      times: meta.times,
-    });
-  } catch (error) {
-    console.warn('Prévision indisponible :', error.message);
-    state.forecast = null;
+  const today = new Date().toISOString().slice(0, 10);
+  const days = forecastDays({
+    zoneDate: meta.date,
+    today,
+    times: meta.times,
+    center: meta.center,
+  });
+  const wanted = days.filter((day) => day.usable).map((day) => day.date);
+
+  let fetched = null;
+  if (wanted.length) {
+    dom.skyInfo.textContent = 'météo…';
+    try {
+      fetched = await fetchForecast({ center: meta.center, dates: wanted, times: meta.times });
+    } catch (error) {
+      console.warn('Prévision indisponible :', error.message);
+    }
   }
-  if (!state.forecast) {
-    dom.sky.value = 'clear';
-    state.skyMode = 'clear';
-  }
+
+  // Une autre zone a pu s'ouvrir pendant la requête ; la sienne est en route.
+  if (state.meta !== meta) return;
+  state.forecast = {
+    meta,
+    dates: fetched?.dates ?? [],
+    series: fetched?.series ?? {},
+    note: fetched ? null : skyNote(meta, wanted.length ? null : days[0]),
+  };
+  syncSkyChoice();
   renderDayChoices();
   invalidateContexts();
-  if (state.meta === meta) applyTime();
+  applyTime();
+}
+
+/** Prévision de la zone affichée, ou `null` — jamais celle d'une autre zone. */
+function zoneForecast() {
+  return state.forecast?.meta === state.meta ? state.forecast : null;
+}
+
+/**
+ * Pourquoi le ciel reste clair alors que la météo était demandée : une ligne
+ * courte pour le bandeau, une explication pour l'infobulle.
+ *
+ * @param {object} meta métadonnées de la zone
+ * @param {{date: string, drift: number}|null} stale le jour écarté, s'il l'a
+ *   été pour sa course solaire ; `null` si la prévision n'a simplement pas
+ *   répondu.
+ */
+function skyNote(meta, stale) {
+  if (!stale) {
+    return {
+      short: 'météo indisponible',
+      long:
+        'Open-Meteo n’a pas répondu, ou ne couvre pas cette date. La carte reste en ' +
+        'ciel clair, la référence stable.',
+    };
+  }
+  const computed = new Date(`${meta.date}T12:00:00`).toLocaleDateString('fr-FR', {
+    day: 'numeric',
+    month: 'long',
+  });
+  const gap = stale.drift.toLocaleString('fr-FR', {
+    maximumFractionDigits: stale.drift < 10 ? 1 : 0,
+  });
+  return {
+    short: `météo écartée : ombres du ${computed}`,
+    long:
+      `Les ombres ont été calculées pour le ${computed}. Aux mêmes heures, le soleil ` +
+      `d’aujourd’hui s’en écarte jusqu’à ${gap}° : appliquer la météo du jour ` +
+      `poserait les nuages d’un jour sur le soleil d’un autre. La carte reste en ` +
+      `ciel clair, la référence stable. « npm run data:refresh » recalcule les ombres.`,
+  };
+}
+
+/**
+ * Accorde le menu « Ciel » à ce qui est réellement appliqué.
+ *
+ * Le choix de l'utilisateur n'est jamais écrasé : il reste dans `state.skyMode`
+ * et dans ses préférences. Il l'était jusqu'ici dès qu'une prévision manquait,
+ * si bien qu'une zone suivante, à jour, s'ouvrait en ciel clair sans raison.
+ * Quand la prévision manque, le menu affiche « Ciel clair » et grise l'autre
+ * option : un menu qui annoncerait la météo sur une carte en ciel clair
+ * mentirait.
+ */
+function syncSkyChoice() {
+  const forecast = zoneForecast();
+  const available = Boolean(forecast?.dates.length);
+  dom.sky.querySelector('option[value="forecast"]').disabled = !available;
+  dom.sky.value = available ? state.skyMode : 'clear';
+  dom.sky.title = forecast?.note?.long ?? '';
 }
 
 /**
@@ -735,7 +822,7 @@ async function loadForecast(meta) {
  * du calcul à celle du jour.
  */
 function renderDayChoices() {
-  const dates = state.forecast?.dates ?? [];
+  const dates = zoneForecast()?.dates ?? [];
   dom.dayField.hidden = dates.length < 2;
   if (dates.length < 2) {
     state.day = dates[0] ?? null;
@@ -1185,14 +1272,17 @@ function sampleSide(entry, cursor) {
 /**
  * Prévision du jour sélectionné, ou `null` s'il n'y en a pas.
  *
- * Seule la **météo** change d'un jour à l'autre : les séries d'ombrage restent
- * celles de la date du calcul. Sur trois jours la dérive solaire vaut moins de
- * 3 % de longueur d'ombre, sous l'incertitude sur la hauteur des bâtiments —
- * c'est ce qui borne l'horizon proposé.
+ * Seule la **météo** change d'un jour à l'autre : le soleil et les séries
+ * d'ombrage restent ceux de la date du calcul. Ce n'est tenable que tant que le
+ * soleil du jour prévu reste celui du calcul — `loadForecast` n'a retenu que ces
+ * jours-là, et la prévision n'est lue que pour la zone qui l'a demandée : au
+ * changement de zone, celle de la précédente ne doit pas s'appliquer le temps
+ * que la nouvelle arrive.
  */
 function forecastSeries() {
-  if (state.skyMode !== 'forecast' || !state.forecast) return null;
-  return state.forecast.series[state.day] ?? state.forecast.series[state.forecast.dates[0]] ?? null;
+  const forecast = zoneForecast();
+  if (state.skyMode !== 'forecast' || !forecast) return null;
+  return forecast.series[state.day] ?? forecast.series[forecast.dates[0]] ?? null;
 }
 
 function weatherAt(minutes) {
@@ -1214,6 +1304,9 @@ function weatherAt(minutes) {
       ? {
           beam: mix(a.irradiance.beam, b.irradiance?.beam ?? a.irradiance.beam),
           diffuse: mix(a.irradiance.diffuse, b.irradiance?.diffuse ?? a.irradiance.diffuse),
+          dewPoint: Number.isFinite(a.irradiance.dewPoint)
+            ? mix(a.irradiance.dewPoint, b.irradiance?.dewPoint ?? a.irradiance.dewPoint)
+            : null,
         }
       : null,
     source: 'météo',
@@ -1264,6 +1357,22 @@ function invalidateContexts() {
   contextCache.clear();
 }
 
+/**
+ * Les deux sens de marche d'un trottoir, en radians.
+ *
+ * L'éclairement à l'œil dépend de la direction du regard, et la carte ne sait
+ * pas dans quel sens on prendra la rue. Elle évalue donc les deux sens de l'axe
+ * et retient le pire — la même convention que l'éblouissement avait déjà. L'axe
+ * se lit dans le côté du trottoir, qui en est la normale : « trottoir nord »,
+ * c'est une rue est-ouest.
+ */
+function walkingDirections(entry) {
+  const rank = CARDINALS.indexOf(entry.side);
+  if (rank < 0) return undefined;
+  const axis = ((rank * 45 + 90) * Math.PI) / 180;
+  return [axis, axis + Math.PI];
+}
+
 function evaluateSide(entry, context, heading) {
   const cursor = seriesCursor(context.minutes);
   const { transmission, flicker } = sampleSide(entry, cursor);
@@ -1273,17 +1382,20 @@ function evaluateSide(entry, context, heading) {
     svf,
     altitude: context.sun.altitude,
     azimuth: context.sun.azimuth,
-    heading,
+    heading: Number.isFinite(heading) ? heading : walkingDirections(entry),
     horizon: entry.horizon,
     flicker,
     albedo: state.meta.albedo,
-    // Absent des jeux calculés avant l'ajout du terme de sol : le modèle
-    // retombe alors sur sa valeur par défaut, sans recalcul nécessaire.
+    // Absents des jeux calculés avant leur ajout : le modèle retombe alors sur
+    // ses valeurs par défaut, sans recalcul nécessaire.
     groundAlbedo: state.meta.groundAlbedo,
+    glazing: state.meta.glazing,
+    weights: state.meta.weights,
     // Chaussée mouillée : elle renvoie le soleil bas en miroir.
     wet: wetnessFromRain(context.weather.rain),
-    luxReference: state.meta.luxReference,
-    veil: entry.veil,
+    // Une zone calculée avant la pondération photophobe porte une voile pondérée
+    // par la mélanopsine seule : on la ramène à l'échelle d'aujourd'hui.
+    veil: state.meta.veilWeighting === 'photophobic' ? entry.veil : entry.veil * LEGACY_VEIL_SCALE,
     sky: context.sky,
   });
   return {
@@ -1313,6 +1425,8 @@ function evaluateSide(entry, context, heading) {
 /** Valeur cartographiée pour un trottoir, selon le mode de lecture. */
 function displayValue(evaluated) {
   switch (state.mode) {
+    case 'dose':
+      return evaluated.dose * 100;
     case 'sun':
       return evaluated.sun * 100;
     case 'svf':
@@ -1353,15 +1467,20 @@ function applyTime() {
   dom.sunInfo.textContent = night
     ? 'nuit — soleil sous l’horizon'
     : `soleil ${altitudeDeg.toFixed(0)}° · azimut ${(context.sun.azimuth * DEG).toFixed(0)}°`;
+  // Un ciel clair imposé dit pourquoi : sans cela il passerait pour le choix de
+  // l'utilisateur — ou, pire, pour la météo du jour.
+  const note =
+    context.weather === CLEAR_SKY && state.skyMode === 'forecast' ? zoneForecast()?.note : null;
   dom.skyInfo.textContent =
     context.weather === CLEAR_SKY
-      ? 'ciel clair (référence)'
+      ? `ciel clair (référence)${note ? ` · ${note.short}` : ''}`
       : `${skyLabel(context.weather.cloud)} · UV ${(context.weather.uv ?? 0).toFixed(1)}` +
         // On distingue les flux réellement modélisés d'une déduction : sous un
         // ciel annoncé couvert, il reste souvent beaucoup de soleil direct.
         (context.sky.measured
           ? ` · ${(context.sky.directNormal / 1000).toFixed(0)} klx directs (mesuré)`
           : '');
+  dom.skyInfo.title = note?.long ?? '';
 
   paintVisible(context, true);
 
@@ -2778,12 +2897,16 @@ function renderPanel(props) {
   // la centaine suffit ; au-delà, le millier.
   const cdm2 = (value) =>
     value >= 1000 ? `${(value / 1000).toFixed(1)} kcd/m²` : `${Math.round(value / 10) * 10} cd/m²`;
+  const klx = (value) => `${(value / 1000).toFixed(value < 10000 ? 1 : 0)} klx`;
   const rows = twoSided
     ? [
         ['', `côté ${l.side}`, `côté ${r.side}`],
         ['Indice', l.index, r.index],
+        ['Lumière à l’œil', pct(l.dose), pct(r.dose)],
+        ['Éclairement à l’œil', klx(l.eyeLux), klx(r.eyeLux)],
+        ['dont équivalent mélanopique', klx(l.melanopicLux), klx(r.melanopicLux)],
         ['Soleil direct', pct(l.sun), pct(r.sun)],
-        ['Éblouissement de face', pct(l.glare), pct(r.glare)],
+        ['Éblouissement', pct(l.glare), pct(r.glare)],
         ['Scintillement', pct(l.flicker), pct(r.flicker)],
         ['Réverbération', pct(l.reverb), pct(r.reverb)],
         ['Murs éclairés', pct(l.sunlitWalls), pct(r.sunlitWalls)],
@@ -2791,17 +2914,15 @@ function renderPanel(props) {
         ['Luminance du sol', cdm2(l.groundLuminance), cdm2(r.groundLuminance)],
         ['Ouverture au ciel', pct(l.svf), pct(r.svf)],
         ['Couvert arboré', `${l.canopy} %`, `${r.canopy} %`],
-        ['Éclairement', `${(l.lux / 1000).toFixed(0)} klx`, `${(r.lux / 1000).toFixed(0)} klx`],
-        [
-          'Équivalent mélanopique',
-          `${(l.melanopicLux / 1000).toFixed(0)} klx`,
-          `${(r.melanopicLux / 1000).toFixed(0)} klx`,
-        ],
+        ['Éclairement au sol', klx(l.lux), klx(r.lux)],
         ['Indice UV', l.uv.toFixed(1), r.uv.toFixed(1)],
       ]
     : [
+        ['Lumière à l’œil', pct(l.dose)],
+        ['Éclairement à l’œil', klx(l.eyeLux)],
+        ['dont équivalent mélanopique', klx(l.melanopicLux)],
         ['Soleil direct', pct(l.sun)],
-        ['Éblouissement de face', pct(l.glare)],
+        ['Éblouissement', pct(l.glare)],
         ['Scintillement', pct(l.flicker)],
         ['Réverbération', pct(l.reverb)],
         ['Murs éclairés', pct(l.sunlitWalls)],
@@ -2809,8 +2930,7 @@ function renderPanel(props) {
         ['Luminance du sol', cdm2(l.groundLuminance)],
         ['Ouverture au ciel', pct(l.svf)],
         ['Couvert arboré', `${l.canopy} %`],
-        ['Éclairement', `${(l.lux / 1000).toFixed(0)} klx`],
-        ['Équivalent mélanopique', `${(l.melanopicLux / 1000).toFixed(0)} klx`],
+        ['Éclairement au sol', klx(l.lux)],
         ['Indice UV', `${l.uv.toFixed(1)} — ${uvLabel(l.uv)}`],
       ];
 

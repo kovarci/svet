@@ -6,72 +6,100 @@
  *
  * Le pipeline ne calcule et ne stocke que des grandeurs *physiques* qui
  * dépendent de la géométrie de la ville : la transmission du rayon solaire, le
- * facteur de vue du ciel, le scintillement. Tout le reste — éclairement,
- * éblouissement, indice, UV — se recompose ici, à l'affichage. C'est ce qui
- * permet d'appliquer la météo du jour ou de retoucher les pondérations sans
- * relancer une seule minute de calcul.
+ * facteur de vue du ciel, le profil d'horizon, le scintillement. Tout le reste —
+ * éclairement à l'œil, éblouissement, indice, UV — se recompose ici, à
+ * l'affichage. C'est ce qui permet d'appliquer la météo du jour ou de retoucher
+ * les pondérations sans relancer une seule minute de calcul.
  *
- * L'indice n'est pas une mesure. C'est une estimation à partir de la forme de
- * la ville : il répond à « cet endroit est-il plus exposé que cet autre », pas
- * à « combien de lux exactement ».
+ * ── La chaîne, et d'où vient chaque maillon ─────────────────────────────────
+ *
+ *   flux du modèle météo (W/m²)            Open-Meteo, ou ciel clair
+ *     → ciel clair                          Ineichen & Perez 2002
+ *     → partage direct/diffus hors ligne    Erbs, Klein & Duffie 1982
+ *     → lux                                 efficacités de Perez 1990
+ *     → luminance du ciel                   Perez, Seals & Michalsky 1993
+ *     → spectre, rapport mélanopique        SPCTRL2, Bird & Riordan 1986 ; CIE S 026
+ *     → éclairement **à l'œil**             plan vertical, CIE S 026
+ *     → signal photophobe                   Zele et al. 2021
+ *     → dose, en logarithme                 McAdams et al. 2020 ; seuil de Perenboom et al. 2018
+ *     → sources éblouissantes               structure de la DGP, Wienold & Christoffersen 2006 ;
+ *                                           indices de position de Guth et d'Iwata
+ *
+ * L'indice n'est pas une mesure. Il répond à « cet endroit est-il plus exposé
+ * que cet autre », pas à « combien de lux exactement ». Ce qui reste un
+ * jugement — les trois poids de l'indice, quelques hypothèses de géométrie — est
+ * dit là où c'est posé.
  */
 
-import { clearSkyIlluminance, linkeFromBeam, perezSkyIndices } from './lib/sun.js';
-import { skyDistribution } from './lib/sky.js';
+import {
+  clearSkyIrradiance,
+  DEFAULT_LINKE_TURBIDITY,
+  erbsSplit,
+  linkeFromBeam,
+  perezCategory,
+  perezEfficacy,
+  perezSkyIndices,
+  precipitableWater,
+} from './lib/sun.js';
+import { geometricSkyView, skyDistribution } from './lib/sky.js';
+import { daylightMelanopic, photophobicRatio, planckMelanopicDER } from './lib/spectrum.js';
+
+const D2R = Math.PI / 180;
+const R2D = 180 / Math.PI;
 
 /**
- * Éclairement diffus horizontal qui sature la gêne due au ciel lui-même.
- *
- * Attention au piège : ce n'est *pas* la valeur d'un ciel clair (~15 500 lux au
- * zénith). Sous un ciel couvert, tout le rayonnement devient diffus et
- * l'éclairement diffus horizontal grimpe vers 50 000 lux — bien au-delà d'un
- * ciel bleu. Normaliser sur le ciel clair ferait dépasser 1 à cette composante
- * et rendrait la carte absurdement chaude dès qu'il y a des nuages.
- *
- * 25 000 lux correspond à un ciel blanc franchement lumineux ; au-delà, la
- * gêne ne croît plus vraiment, d'où la saturation.
+ * Tangente au degré entier près. Le profil d'horizon est stocké en degrés
+ * entiers : la carte évalue des milliers de trottoirs à chaque repeinte, et la
+ * trigonométrie de ses trente-deux secteurs coûtait plus que tout le reste.
  */
-const SKY_SATURATION = 25000;
+const TAN_DEGREES = Float64Array.from({ length: 91 }, (_, d) => Math.tan(Math.min(d, 89.9) * D2R));
 
-/** Plafond mesuré de l'éclairement diffus horizontal, ciel voilé lumineux d'été. */
-const MAX_DIFFUSE = 45000;
+function tanDeg(value) {
+  return Number.isInteger(value) && value >= 0 && value <= 90
+    ? TAN_DEGREES[value]
+    : Math.tan(Math.max(0, Math.min(89.9, value)) * D2R);
+}
 
-/**
- * Luminance de façade qui sature la gêne, en cd/m².
- *
- * Un mur de calcaire en plein soleil — 50 000 lux dessus, albédo 0,45 —
- * atteint environ 7 000 cd/m². C'est du même ordre qu'un ciel couvert lumineux,
- * sauf que le mur, lui, est à hauteur des yeux. Au-delà de 8 000, la gêne ne
- * croît plus vraiment.
- */
-const REVERB_SATURATION = 8000;
-
-/**
- * Éclairement direct normal au-delà duquel l'éblouissement ne croît plus, en lux.
- *
- * C'est une référence de saturation, pas la valeur d'un ciel clair : le modèle
- * de ciel clair culmine vers 85 000 lux à Paris. Le nombre traînait en dur au
- * milieu de la formule d'éblouissement, où on le confondait avec le sommet du
- * modèle — et où il ne bornait rien, faute de `min`. Un flux mesuré supérieur
- * pouvait donc pousser la composante au-delà de 1.
- */
-const GLARE_SATURATION = 128000;
+/** Cosinus et sinus des azimuts de secteur, par nombre de secteurs. */
+const sectorTrigCache = new Map();
+function sectorTrig(bins) {
+  let trig = sectorTrigCache.get(bins);
+  if (!trig) {
+    const cos = new Float64Array(bins);
+    const sin = new Float64Array(bins);
+    for (let i = 0; i < bins; i++) {
+      cos[i] = Math.cos((2 * Math.PI * i) / bins);
+      sin[i] = Math.sin((2 * Math.PI * i) / bins);
+    }
+    trig = { cos, sin };
+    sectorTrigCache.set(bins, trig);
+  }
+  return trig;
+}
 
 /**
  * Réflectance du sol de rue, façades exclues.
  *
- * Le modèle n'avait aucun terme de sol : il additionnait le faisceau direct, le
- * ciel et les façades, et s'arrêtait là. Or une chaussée ensoleillée à 80 000 lux
- * renvoie près de 4 000 cd/m² — le même ordre de grandeur qu'un mur de calcaire
- * au soleil — et elle occupe **toute la moitié basse du champ de vision**, celle
- * où l'on regarde en marchant.
+ * Une chaussée ensoleillée à 80 000 lux renvoie près de 4 000 cd/m² — le même
+ * ordre de grandeur qu'un mur de calcaire au soleil — et elle occupe **toute la
+ * moitié basse du champ de vision**, celle où l'on regarde en marchant.
  *
  * 0,18 est un mélange : l'asphalte d'une chaussée tourne autour de 0,10, un
- * trottoir de pierre ou de béton entre 0,25 et 0,35. Bien plus sombre que les
- * 0,45 des façades parisiennes, d'où une valeur distincte plutôt que l'albédo
- * unique employé jusqu'ici.
+ * trottoir de pierre ou de béton entre 0,25 et 0,35.
  */
 export const DEFAULT_GROUND_ALBEDO = 0.18;
+
+/**
+ * Part vitrée des façades, hypothèse.
+ *
+ * Un immeuble haussmannien perce sa façade d'environ un quart de fenêtres ; un
+ * immeuble de bureaux bien davantage. Le vitrage sert deux fois : il retire sa
+ * part à la réflexion diffuse de la pierre — une fenêtre renvoie peu, l'intérieur
+ * est sombre — et il renvoie le soleil **en miroir**, ce qui fait une source
+ * d'éblouissement à part entière. Aucune donnée ouverte ne donne la part vitrée
+ * bâtiment par bâtiment : c'est une valeur moyenne, déclarée comme telle.
+ */
+export const DEFAULT_GLAZING_RATIO = 0.25;
 
 /**
  * Mouillage de la chaussée déduit des précipitations, de 0 à 1.
@@ -92,361 +120,157 @@ export function wetnessFromRain(recentRainMm) {
 }
 
 /**
- * Efficacités lumineuses, en lumens par watt : de quoi convertir les flux
- * énergétiques du modèle météo en lux, la grandeur qui nous intéresse.
+ * Réflectance de Fresnel d'une interface, lumière non polarisée.
  *
- * Le ciel diffus est plus « efficace » que le faisceau direct parce qu'il est
- * plus bleu, donc plus proche du pic de sensibilité de l'œil. Valeurs usuelles
- * pour un ciel dégagé (Littlefair, 1985).
+ * Remplace l'approximation de Schlick, qui s'écarte de quelques pour cent de la
+ * formule exacte au voisinage de l'incidence rasante — là où tout se joue ici.
+ *
+ * @param {number} cosIncidence cosinus de l'angle d'incidence
+ * @param {number} n indice de réfraction (eau 1,333 ; verre 1,52)
  */
-const BEAM_EFFICACY = 105;
-const DIFFUSE_EFFICACY = 120;
-
-/**
- * Atténuation par la couverture nuageuse.
- *
- * L'éclairement global suit la relation empirique de Kasten & Czeplak (1980),
- * G/G₀ = 1 − 0,75·N^3,4 avec N la nébulosité. Le rayonnement direct, lui,
- * s'effondre beaucoup plus vite : sous un ciel complètement couvert il ne reste
- * plus rien du faisceau, et toute la lumière arrive du ciel entier.
- *
- * C'est important ici, et pas seulement cosmétique : par temps couvert, éviter
- * le soleil n'a plus de sens, alors qu'une rue étroite protège toujours de la
- * luminance du ciel. Le classement des rues change complètement.
- *
- * @param {number} altitude hauteur du soleil, en radians
- * @param {number} cloud couverture nuageuse, de 0 (ciel clair) à 1 (couvert)
- */
-export function skyConditions(altitude, cloud = 0, irradiance = null, azimuth = null, bins = 16) {
-  const sinH = Math.max(Math.sin(altitude), 0);
-
-  // Quand le modèle météo fournit directement les flux, on les prend : ils
-  // valent bien mieux qu'une déduction à partir de la nébulosité. Reste à
-  // passer des watts aux lux, ce que fait l'efficacité lumineuse — le faisceau
-  // direct est un peu moins « efficace » que la lumière du ciel, plus bleue.
-  if (irradiance && Number.isFinite(irradiance.beam)) {
-    const directNormal = Math.max(0, irradiance.beam) * BEAM_EFFICACY;
-    const diffuseHorizontal = Math.min(
-      MAX_DIFFUSE,
-      Math.max(0, irradiance.diffuse ?? 0) * DIFFUSE_EFFICACY,
-    );
-    const global = directNormal * sinH + diffuseHorizontal;
-    return withDistribution(
-      {
-        directNormal,
-        diffuseHorizontal,
-        sinH,
-        directShare: global > 0 ? (directNormal * sinH) / global : 0,
-        measured: true,
-      },
-      altitude,
-      azimuth,
-      bins,
-    );
-  }
-
-  const clear = clearSkyIlluminance(altitude);
-  const c = Math.max(0, Math.min(1, cloud));
-
-  const globalClear = clear.directNormal * sinH + clear.diffuseHorizontal;
-  const globalCloudy = globalClear * (1 - 0.75 * Math.pow(c, 3.4));
-
-  // La nébulosité est une *fraction de ciel couvert*, pas une transmission :
-  // à 50 % le disque solaire reste dégagé une bonne partie du temps. L'exposant
-  // 1,5 corrige légèrement à la baisse — les nuages s'accumulent plus volontiers
-  // autour du soleil qu'ailleurs.
-  const directNormal = clear.directNormal * Math.pow(1 - c, 1.5);
-
-  // Le reste du global part en diffus, plafonné : sous ciel voilé lumineux on
-  // mesure jusqu'à ~45 000 lux d'éclairement diffus horizontal, jamais plus.
-  const diffuseHorizontal = Math.min(MAX_DIFFUSE, Math.max(0, globalCloudy - directNormal * sinH));
-
-  return withDistribution(
-    {
-      directNormal,
-      diffuseHorizontal,
-      sinH,
-      /** Part de la lumière qui reste directionnelle : 1 par ciel clair, 0 sous la couche. */
-      directShare: globalClear > 0 ? (directNormal * sinH) / globalClear : 0,
-      measured: false,
-    },
-    altitude,
-    azimuth,
-    bins,
-  );
+export function fresnel(cosIncidence, n) {
+  const ci = Math.max(0, Math.min(1, cosIncidence));
+  const si2 = 1 - ci * ci;
+  const ct = Math.sqrt(Math.max(0, 1 - si2 / (n * n)));
+  const rs = (ci - n * ct) / (ci + n * ct);
+  const rp = (n * ci - ct) / (n * ci + ct);
+  return Math.min(1, 0.5 * (rs * rs + rp * rp));
 }
 
 /**
- * Attache la distribution de luminance du ciel, quand l'azimut solaire est connu.
- *
- * Elle coûte un tiers de milliseconde à construire, contre un dixième de
- * microseconde à interroger : c'est tout l'intérêt de la placer ici, dans un
- * objet qui ne dépend que de l'instant et que l'appelant met déjà en cache à la
- * minute. Un itinéraire évalue des dizaines de milliers d'arêtes, mais ne
- * traverse qu'une poignée de minutes distinctes.
- *
- * Sans azimut — anciens appels, tests d'invariants — on s'en passe, et le modèle
- * retombe sur le facteur de vue du ciel isotrope d'avant.
+ * Réflectance d'un simple vitrage, ses deux faces comprises (réflexions
+ * multiples dans la lame, absorption négligée) : 2R / (1 + R).
  */
-function withDistribution(sky, altitude, azimuth, bins) {
-  // Clarté de Perez : l'indice normalisé pour classer un ciel. Il remplace la
-  // part directionnelle, une grandeur maison qui confondait des ciels très
-  // différents — un voile uniforme et des cumulus épars peuvent avoir la même
-  // part directe moyenne et des distributions de luminance sans rapport.
-  const { epsilon, brightness } = perezSkyIndices(
-    sky.directNormal,
-    sky.diffuseHorizontal,
-    altitude,
-  );
-  sky.epsilon = epsilon;
-  sky.brightness = brightness;
-  // Le trouble du jour, lu à l'envers du faisceau mesuré. Sert au mode « ciel
-  // clair », qui devient ainsi la référence de *cette* atmosphère et non d'une
-  // moyenne annuelle.
-  if (sky.measured) sky.turbidity = linkeFromBeam(sky.directNormal, altitude);
+function glassReflectance(cosIncidence) {
+  const r = fresnel(cosIncidence, 1.52);
+  return (2 * r) / (1 + r);
+}
 
-  if (!Number.isFinite(azimuth)) return sky;
-  // Le nombre de secteurs doit suivre celui du profil d'horizon stocké. S'il
-  // diffère, `factor` refuse le profil et le modèle retombe **sans un mot** sur
-  // le ciel isotrope : porter les secteurs de 16 à 32 aurait annulé en silence
-  // toute l'anisotropie. C'est exactement le genre de panne muette que ce projet
-  // a déjà payée.
-  sky.distribution = skyDistribution({ altitude, azimuth, epsilon, bins });
+// ─────────────────────────────────────────────────────── le ciel du jour ───
+
+/**
+ * Conditions de ciel à un instant : ce qui ne dépend que de l'heure et de la
+ * météo, jamais du lieu.
+ *
+ * ── Les flux ────────────────────────────────────────────────────────────────
+ *
+ * Quand le modèle météo fournit le direct normal et le diffus horizontal, on les
+ * prend : « 100 % de couverture nuageuse » est une moyenne horaire sur une
+ * maille, qui ne dit pas si le disque solaire est masqué. Sinon — hors ligne —
+ * on part du ciel clair d'Ineichen-Perez, on l'atténue par la relation de Kasten
+ * & Czeplak (1980), G/G₀ = 1 − 0,75·N^3,4, et on partage le global par le modèle
+ * d'Erbs. Le partage posé jusqu'ici, (1 − N)^1,5, n'avait pas de source.
+ *
+ * ── Les lux ─────────────────────────────────────────────────────────────────
+ *
+ * Par les efficacités de Perez (1990), qui suivent la clarté du ciel, la hauteur
+ * du soleil et l'eau précipitable, au lieu de 105 et 120 lm/W en toute
+ * circonstance.
+ *
+ * ── Le spectre ──────────────────────────────────────────────────────────────
+ *
+ * Par SPCTRL2 pour le faisceau et le ciel clair. Sous les nuages, la lumière
+ * diffusée par les gouttelettes est spectralement neutre : la part nuageuse du
+ * ciel reçoit le spectre du global clair, la part dégagée celui du ciel bleu. Le
+ * partage suit la clarté de Perez — 0 sous la couche, 1 par ciel clair.
+ *
+ * @param {number} altitude hauteur du soleil, en radians
+ * @param {number} [cloud] couverture nuageuse, de 0 à 1 — repli hors ligne
+ * @param {{beam: number, diffuse: number, dewPoint?: number}} [irradiance]
+ *   flux du modèle météo, en W/m² : direct normal, diffus horizontal
+ * @param {number} [azimuth] azimut du soleil, en radians — sans lui, pas de
+ *   distribution de luminance
+ * @param {number} [bins] nombre de secteurs du profil d'horizon stocké
+ */
+export function skyConditions(altitude, cloud = 0, irradiance = null, azimuth = null, bins = 16) {
+  const sinH = Math.max(Math.sin(altitude), 0);
+  const water = precipitableWater(irradiance?.dewPoint);
+  const clear = clearSkyIrradiance(altitude, DEFAULT_LINKE_TURBIDITY);
+
+  let dni;
+  let dhi;
+  const measured = Boolean(irradiance && Number.isFinite(irradiance.beam));
+  if (measured) {
+    dni = Math.max(0, irradiance.beam);
+    dhi = Math.max(0, irradiance.diffuse ?? 0);
+  } else {
+    const c = Math.max(0, Math.min(1, cloud));
+    const ghi = clear.ghi * (1 - 0.75 * Math.pow(c, 3.4));
+    const split = erbsSplit(ghi, altitude);
+    // Par ciel tout à fait clair, Ineichen-Perez dit mieux le partage qu'une
+    // régression faite sur tous les temps ; on passe de l'un à l'autre sur les
+    // premiers 20 % de couverture, sans palier.
+    const w = Math.min(1, c / 0.2);
+    const scale = clear.ghi > 0 ? ghi / clear.ghi : 0;
+    dni = (1 - w) * clear.dni * scale + w * split.dni;
+    dhi = (1 - w) * clear.dhi * scale + w * split.dhi;
+  }
+
+  const { epsilon, brightness } = perezSkyIndices(dni, dhi, altitude);
+  const efficacy = perezEfficacy(epsilon, brightness, altitude, water);
+  const directNormal = dni * efficacy.beam;
+  const diffuseHorizontal = dhi * efficacy.diffuse;
+  const global = directNormal * sinH + diffuseHorizontal;
+
+  // Le trouble du jour, relu dans le faisceau — seulement par ciel clair : un
+  // nuage devant le disque l'éteint sans rien dire de l'atmosphère.
+  const turbidity =
+    measured && perezCategory(epsilon) >= 6 && altitude > 5 * D2R
+      ? linkeFromBeam(dni, altitude)
+      : DEFAULT_LINKE_TURBIDITY;
+
+  const sky = {
+    /** Éclairement direct normal, en lux. */
+    directNormal,
+    /** Éclairement diffus horizontal, en lux. */
+    diffuseHorizontal,
+    /** Les mêmes, en W/m². */
+    dni,
+    dhi,
+    sinH,
+    /** Part de l'éclairement global horizontal qui arrive en faisceau. */
+    directShare: global > 0 ? (directNormal * sinH) / global : 0,
+    measured,
+    epsilon,
+    brightness,
+    turbidity,
+    water,
+    melanopic: daylightRatios(altitude, epsilon, turbidity, water),
+  };
+
+  if (Number.isFinite(azimuth) && altitude > 0) {
+    // Le nombre de secteurs doit suivre celui du profil d'horizon stocké. S'il
+    // diffère, `factor` refuse le profil et le modèle retombe **sans un mot** sur
+    // le facteur de vue du ciel isotrope — la panne muette que ce projet a déjà
+    // payée.
+    sky.distribution = skyDistribution({ altitude, azimuth, epsilon, brightness, bins });
+  }
   return sky;
 }
 
 /**
- * Part de l'éclairement diffus de ciel ouvert qui atteint réellement ce point.
- *
- * C'est ici que se joue le remplacement du ciel isotrope. Le facteur de vue du
- * ciel — la fraction *géométrique* de voûte visible — reste le repli : il
- * suppose une luminance uniforme, ce qui n'arrive jamais.
+ * Rapports mélanopiques du faisceau, du ciel et de la lumière qu'ils déposent
+ * ensemble sur les surfaces.
  */
-function skyReach(svf, horizon, sky) {
-  const factor = horizon ? sky?.distribution?.factor(horizon) : null;
-  return Number.isFinite(factor) ? factor : svf;
+function daylightRatios(altitude, epsilon, turbidity, water) {
+  if (altitude <= 0) return { beam: 0.5, sky: 1, surfaces: 1 };
+  const altitudeDeg = altitude * R2D;
+  const spectral = daylightMelanopic(altitudeDeg, turbidity, water);
+  const clear = clearSkyIrradiance(altitude, turbidity);
+  const clearEpsilon = perezSkyIndices(clear.dni, clear.dhi, altitude).epsilon;
+  // Part dégagée du ciel, lue dans la clarté : 0 sous la couche (ε = 1), 1 quand
+  // le ciel est aussi clair que le ciel clair de ce jour.
+  const clearShare =
+    clearEpsilon > 1 ? Math.max(0, Math.min(1, (epsilon - 1) / (clearEpsilon - 1))) : 0;
+  const sinH = Math.sin(altitude);
+  const globalClear =
+    (spectral.beam * clear.dni * sinH + spectral.diffuse * clear.dhi) /
+    Math.max(1e-9, clear.dni * sinH + clear.dhi);
+  const sky = clearShare * spectral.diffuse + (1 - clearShare) * globalClear;
+  return { beam: spectral.beam, sky, surfaces: globalClear };
 }
 
-/**
- * Température de couleur du faisceau solaire direct, selon sa hauteur.
- *
- * Le soleil rougit en descendant : la diffusion de Rayleigh retire d'autant plus
- * de bleu que le trajet dans l'atmosphère est long. De 5 600 K au zénith à
- * moins de 2 000 K au ras de l'horizon — l'écart de couleur qu'on voit à l'œil
- * nu entre midi et le coucher.
- *
- * @param {number} altitudeDeg hauteur du soleil, en degrés
- */
-export function beamColourTemperature(altitudeDeg) {
-  const table = [
-    [0, 1900],
-    [2, 2400],
-    [5, 2900],
-    [10, 3600],
-    [20, 4600],
-    [30, 5100],
-    [50, 5600],
-    [90, 5800],
-  ];
-  return interpolate(table, altitudeDeg);
-}
-
-/**
- * Température de couleur du ciel diffus, selon sa clarté.
- *
- * Un ciel couvert est à peu près neutre, autour de 6 500 K. Un ciel bleu franc
- * est la source la plus bleue qu'on rencontre dehors : au-delà de 15 000 K,
- * parce qu'on n'y voit précisément que la lumière diffusée par Rayleigh, celle
- * que le faisceau direct a perdue.
- *
- * @param {number} directShare part directionnelle de la lumière (0-1)
- */
-export function skyColourTemperature(directShare) {
-  const x = Math.max(0, Math.min(1, directShare));
-  return 6500 + 9500 * x;
-}
-
-function interpolate(table, x) {
-  if (x <= table[0][0]) return table[0][1];
-  const last = table.at(-1);
-  if (x >= last[0]) return last[1];
-  for (let i = 1; i < table.length; i++) {
-    if (x > table[i][0]) continue;
-    const [x0, y0] = table[i - 1];
-    const [x1, y1] = table[i];
-    return y0 + ((y1 - y0) * (x - x0)) / (x1 - x0);
-  }
-  return last[1];
-}
-
-/**
- * Éclairement pondéré par la sensibilité mélanopique, en lux équivalents.
- *
- * ── Pourquoi c'est ici la bonne grandeur ────────────────────────────────────
- *
- * La photophobie ne se joue pas en lumens. Elle passe pour l'essentiel par les
- * cellules ganglionnaires à mélanopsine, dont la sensibilité culmine vers 480 nm
- * — dans le bleu. Le modèle le savait déjà, et l'appliquait avec soin **aux
- * lampadaires** : c'est ce qui distingue un sodium d'une LED froide. Il ne le
- * faisait pas du tout pour la lumière du jour, où l'écart est pourtant plus
- * grand encore.
- *
- * À éclairement égal, un ciel bleu zénithal est près de **six fois** plus actif
- * sur la mélanopsine qu'un soleil rasant rougi. Les compter à égalité, comme le
- * faisait la composante de luminosité, revenait à dire que 10 000 lux de ciel
- * d'altitude et 10 000 lux de soleil couchant se valent — ce qui est faux pour
- * exactement le public visé.
- *
- * L'éblouissement, lui, reste photopique : un soleil couchant dans les yeux
- * éblouit par sa luminance, pas par son contenu bleu. Les deux mécanismes sont
- * distincts, et le modèle les sépare désormais.
- */
-export function melanopicIlluminance(direct, diffuse, altitudeDeg, directShare) {
-  return (
-    Math.max(0, direct) * daylightMelanopicRatio(beamColourTemperature(altitudeDeg)) +
-    Math.max(0, diffuse) * daylightMelanopicRatio(skyColourTemperature(directShare))
-  );
-}
-
-/**
- * Rapport mélanopique moyen de la lumière incidente, faisceau et ciel mêlés.
- *
- * Sert à étendre la pondération à ce que renvoient les surfaces : une façade
- * n'invente pas de spectre, elle renvoie celui qu'elle reçoit, à peine teinté
- * par sa propre couleur. Sans ce prolongement, l'éclairement mélanopique affiché
- * ne couvrait que le direct et le diffus, quand l'éclairement total comptait
- * aussi les réflexions — deux grandeurs qu'on ne pouvait pas comparer.
- */
-export function melanopicMix(direct, diffuse, altitudeDeg, directShare) {
-  const sum = Math.max(0, direct) + Math.max(0, diffuse);
-  if (sum <= 0) return 1;
-  return melanopicIlluminance(direct, diffuse, altitudeDeg, directShare) / sum;
-}
-
-/**
- * Réverbération : ce que les façades renvoient dans les yeux.
- *
- * C'est le terme qui manquait, et probablement celui qui compte le plus pour ce
- * public. Un mur de calcaire lutétien au soleil, avec 70 000 lux dessus et un
- * albédo de 0,45, atteint 10 000 cd/m² — la luminance d'un ciel couvert
- * lumineux — et il occupe le champ de vision **à hauteur des yeux**, quand le
- * ciel, lui, est au-dessus. Marcher sur le trottoir à l'ombre face à un mur en
- * plein soleil peut être plus pénible qu'être au soleil.
- *
- * ── Comment savoir si le mur d'en face est éclairé ──────────────────────────
- * Le refaire au lancer de rayons à chaque instant coûterait des milliards
- * d'opérations. On s'en sort avec de la géométrie de canyon, sur le seul profil
- * d'horizon, qui est statique.
- *
- * Dans une rue de largeur W, le soleil à la hauteur α passant au-dessus d'un
- * bâtiment de hauteur H₁ projette son ombre jusqu'à la hauteur H₁ − W·tan α sur
- * le mur d'en face. En posant β₁ = atan(H₁/W) et β₂ = atan(H₂/W), les élévations
- * d'horizon vues du piéton, la part ensoleillée du mur d'en face vaut
- *
- *     1 − max(0, tan β₁ − tan α) / tan β₂
- *
- * La largeur de la rue s'élimine : il ne reste que des angles, ceux-là mêmes
- * que le balayage d'horizon a déjà relevés. Exact pour un canyon droit,
- * approché ailleurs.
- *
- * @param {number[]} horizon élévation de l'horizon bâti par secteur, en degrés
- * @param {number} altitude hauteur du soleil, en radians
- * @param {number} azimuth azimut du soleil, en radians depuis le nord
- * @param {object} sky conditions de ciel
- * @param {number} albedo réflectance des façades
- * @returns {{lux: number, sunlitWalls: number, wallView: number}}
- */
-export function reverberation(horizon, altitude, azimuth, sky, albedo) {
-  const bins = horizon?.length ?? 0;
-  if (bins === 0) return { lux: 0, sunlitWalls: 0, wallView: 0 };
-
-  const tanSun = altitude > 0 ? Math.tan(altitude) : 0;
-  const tanSunSide = Math.tan(horizonAt(horizon, azimuth));
-
-  let lux = 0;
-  let sunlitWalls = 0;
-  let wallView = 0;
-  let weightedLuminance = 0;
-
-  for (let i = 0; i < bins; i++) {
-    const beta = (horizon[i] * Math.PI) / 180;
-    // Part du champ de vision occupée par du mur dans ce secteur : le
-    // complément de la part de ciel, cos²β.
-    const share = 1 - Math.cos(beta) * Math.cos(beta);
-    if (share <= 0) continue;
-    wallView += share;
-
-    const wallAzimuth = (2 * Math.PI * i) / bins;
-    // Le mur me fait face : sa normale pointe vers moi. Le soleil l'éclaire
-    // s'il se trouve de ce côté-là.
-    const facing = -Math.cos(azimuth - wallAzimuth);
-
-    // ── Le ciel que voit ce mur ─────────────────────────────────────────────
-    //
-    // On posait « un mur ne voit qu'un demi-ciel », soit 0,5 × E_diffus, pour
-    // tous les murs de toutes les rues. C'est vrai d'un mur isolé en plein
-    // champ ; dans une rue, le bâtiment d'en face lui en masque une bonne part,
-    // et l'éclairement des façades était donc **surestimé là où la rue est
-    // étroite** — exactement les rues qui comptent.
-    //
-    // Le mur d'en face, vu du pied de ce mur-ci, est deux fois moins haut en
-    // angle que vu du milieu de la rue : la distance double. Sa hauteur relevée
-    // dans le secteur opposé donne donc directement l'obstruction.
-    // Le mur d'en face, vu du pied de ce mur-ci, est deux fois moins haut en
-    // angle que vu du milieu de la rue : la distance double.
-    const oppositeBeta = (horizon[(i + (bins >> 1)) % bins] * Math.PI) / 180;
-    const seenFromWall = (Math.atan(Math.tan(oppositeBeta) / 2) * 180) / Math.PI;
-
-    // Le ciel réellement vu par ce mur, luminance comprise. À défaut de
-    // distribution — anciens appels — on retombe sur le demi-ciel uniforme
-    // corrigé de la seule obstruction.
-    const wallReach =
-      sky.distribution?.wallFactor(i, seenFromWall) ??
-      0.5 * Math.pow(Math.cos((seenFromWall * Math.PI) / 180), 2);
-    let irradiated = wallReach * sky.diffuseHorizontal;
-
-    if (facing > 0 && altitude > 0) {
-      const tanWall = Math.tan(beta);
-      // ── Soleil oblique à la rue ───────────────────────────────────────────
-      //
-      // La formule de canyon supposait le soleil **perpendiculaire** à la rue.
-      // Quand il arrive de biais, son rayon traverse la chaussée sur une
-      // distance W/|cos Δθ| au lieu de W, et descend donc d'autant plus avant
-      // d'atteindre le mur d'en face : l'ombre y monte moins haut.
-      //
-      // À la limite, soleil dans l'axe de la rue (Δθ = 90°), le rayon ne
-      // traverse jamais — le mur est entièrement éclairé, quelle que soit la
-      // hauteur du bâtiment d'en face. C'est exactement ce qui se passe dans une
-      // rue orientée vers le couchant, et le modèle l'ombrait à tort.
-      //
-      // `facing` est déjà le cosinus de l'angle entre le soleil et la normale du
-      // mur : la correction ne coûte rien de plus qu'une division.
-      const effectiveTanSun = tanSun / Math.max(facing, 0.05);
-      const sunlit =
-        tanWall > 0
-          ? Math.max(0, Math.min(1, 1 - Math.max(0, tanSunSide - effectiveTanSun) / tanWall))
-          : 0;
-      irradiated += sky.directNormal * Math.cos(altitude) * facing * sunlit;
-      sunlitWalls += share * sunlit;
-    }
-
-    lux += share * albedo * irradiated;
-    // Luminance de la surface, en cd/m² : c'est *elle* qui éblouit, et non
-    // l'éclairement horizontal qu'elle produit. Un mur à 7 000 cd/m² occupant
-    // le tiers du champ de vision fait mal, même s'il n'ajoute que quelques
-    // milliers de lux sur un plan horizontal — lequel regarde le ciel, pas le
-    // mur.
-    weightedLuminance += share * ((albedo * irradiated) / Math.PI);
-  }
-
-  return {
-    lux: lux / bins,
-    /** Luminance moyenne des murs visibles, pondérée par leur part de champ. */
-    luminance: wallView > 0 ? weightedLuminance / wallView : 0,
-    sunlitWalls: sunlitWalls / bins,
-    wallView: wallView / bins,
-  };
-}
+// ──────────────────────────────────────────────────── géométrie du lieu ────
 
 /** Élévation d'horizon dans une direction quelconque, interpolée entre secteurs. */
 function horizonAt(horizon, azimuth) {
@@ -459,138 +283,389 @@ function horizonAt(horizon, azimuth) {
 }
 
 /**
- * Éclairement reçu par un piéton, en lux.
+ * Part du ciel que le feuillage laisse passer, au-dessus de l'horizon bâti.
+ *
+ * Le profil d'horizon ne relève que le bâti ; le facteur de vue du ciel stocké,
+ * lui, compte le feuillage par Beer-Lambert. Leur rapport dit donc quelle part
+ * du ciel visible les arbres retirent.
+ *
+ * **C'était une régression.** En passant au ciel anisotrope, le modèle avait
+ * cessé de lire le facteur de vue du ciel dès qu'un profil existait : sous les
+ * platanes, le ciel était compté comme dégagé. Mesuré à profil égal, la
+ * composante de ciel restait à 0,453 pour un facteur de vue de 0,6, 0,3 ou 0,1.
+ */
+function foliageTransmission(svf, horizon) {
+  if (!horizon) return 1;
+  const built = geometricSkyView(horizon);
+  if (!(built > 0)) return 1;
+  return Math.max(0, Math.min(1, svf / built));
+}
+
+/**
+ * Orientation réelle des façades, lue dans la forme du profil d'horizon.
+ *
+ * Le modèle traitait chaque secteur comme un mur **tourné vers le piéton**. Vrai
+ * pour une place circulaire ; faux dans une rue, où le mur qu'on voit en
+ * enfilade est le même plan que celui d'en face, et regarde la chaussée, pas le
+ * piéton. Conséquence : un soleil dans l'axe de la rue éclairait de plein fouet
+ * des façades qu'il ne fait que raser.
+ *
+ * Un mur plan à la distance W, de hauteur H, se voit sous l'élévation
+ * tan β(φ) = (H/W)·cos(φ − θ), avec θ la direction du pied de la perpendiculaire.
+ * Trois secteurs voisins suffisent à retrouver θ :
+ *
+ *     tan(φ − θ) = (t₋ − t₊) / (t₋ + t₊) · cot δ
+ *
+ * avec t± = tan β dans les secteurs voisins et δ leur écart. Si un voisin
+ * manque — angle de l'immeuble —, deux suffisent. Isolé, le secteur garde
+ * l'ancienne hypothèse : un mur tourné vers le piéton.
+ *
+ * @returns {Float64Array} azimut de la normale de chaque mur, tournée vers le piéton
+ */
+export function wallNormals(horizon) {
+  return wallGeometry(horizon).angle;
+}
+
+const TAN_LIMIT = Math.tan(80 * D2R);
+
+/**
+ * Géométrie des façades d'un profil, mise en cache.
+ *
+ * Elle ne dépend que du profil, jamais de l'heure ; or une repeinte de la carte
+ * ou un itinéraire réinterrogent les mêmes trottoirs à plusieurs instants. Le
+ * profil stocké est une vue dans le fichier de zone : son tampon et sa position
+ * l'identifient sans rien recopier. Le cache est vidé au-delà d'une borne, pour
+ * qu'une longue session sur toute la région ne le fasse pas grossir sans fin.
+ */
+let geometryCache = new WeakMap();
+let geometryCount = 0;
+const GEOMETRY_LIMIT = 60000;
+
+function wallGeometry(horizon) {
+  const buffer = horizon.buffer;
+  if (!buffer) return computeWallGeometry(horizon);
+  let byOffset = geometryCache.get(buffer);
+  if (!byOffset) {
+    byOffset = new Map();
+    geometryCache.set(buffer, byOffset);
+  }
+  const key = horizon.byteOffset * 256 + horizon.length;
+  let geometry = byOffset.get(key);
+  if (!geometry) {
+    if (geometryCount >= GEOMETRY_LIMIT) {
+      geometryCache = new WeakMap();
+      geometryCount = 0;
+      return wallGeometry(horizon);
+    }
+    geometry = computeWallGeometry(horizon);
+    byOffset.set(key, geometry);
+    geometryCount++;
+  }
+  return geometry;
+}
+
+/**
+ * L'azimut de chaque normale et son vecteur unitaire, obtenu sans
+ * trigonométrie depuis tan(φ − θ) ; et l'obstacle que voit chaque mur.
+ */
+function computeWallGeometry(horizon) {
+  const bins = horizon.length;
+  const width = (2 * Math.PI) / bins;
+  const cotWidth = 1 / Math.tan(width);
+  const cosWidth = Math.cos(width);
+  const sinWidth = Math.sin(width);
+  const { cos, sin } = sectorTrig(bins);
+  const angle = new Float32Array(bins);
+  const nx = new Float32Array(bins);
+  const ny = new Float32Array(bins);
+  const seen = new Float32Array(bins);
+
+  for (let i = 0; i < bins; i++) {
+    const t0 = tanDeg(horizon[i]);
+    const before = tanDeg(horizon[(i + bins - 1) % bins]);
+    const after = tanDeg(horizon[(i + 1) % bins]);
+    let q = 0;
+    if (t0 > 0) {
+      if (before > 0 && after > 0) q = ((before - after) / (before + after)) * cotWidth;
+      else if (after > 0) q = (cosWidth - after / t0) / sinWidth;
+      else if (before > 0) q = (before / t0 - cosWidth) / sinWidth;
+    }
+    q = Math.max(-TAN_LIMIT, Math.min(TAN_LIMIT, q));
+    // Le pied de la perpendiculaire est en φ − x, avec tan x = q ; la normale
+    // pointe à l'opposé, vers le piéton.
+    const cx = 1 / Math.sqrt(1 + q * q);
+    const sx = q * cx;
+    nx[i] = -(cos[i] * cx + sin[i] * sx);
+    ny[i] = -(sin[i] * cx - cos[i] * sx);
+    angle[i] = (i * width - Math.atan(q) + Math.PI) % (2 * Math.PI);
+  }
+  // L'obstacle que voit chaque mur : l'horizon du piéton dans la direction où
+  // le mur regarde, deux fois moins haut en angle vu de son pied.
+  for (let i = 0; i < bins; i++) {
+    if (!(horizon[i] > 0)) continue;
+    seen[i] = Math.atan(tanDeg(horizonAt(horizon, angle[i]) * R2D) / 2) * R2D;
+  }
+  return { angle, cos: nx, sin: ny, seen };
+}
+
+/**
+ * Ce que renvoient les façades : luminance de chaque mur, part éclairée, et
+ * réflexions du soleil dans les vitrages.
+ *
+ * ── Le mur d'en face est-il éclairé ─────────────────────────────────────────
+ *
+ * Géométrie de canyon, sur le seul profil d'horizon. Dans une rue de largeur W,
+ * le soleil à la hauteur α passant au-dessus d'un bâtiment de hauteur H₁ projette
+ * son ombre jusqu'à H₁ − W·tan α sur le mur d'en face, d'où une part éclairée
+ *
+ *     1 − max(0, tan β₁ − tan α_eff) / tan β₂
+ *
+ * avec α_eff corrigé de l'obliquité : de biais, le rayon traverse la chaussée sur
+ * W/cos Δθ. La largeur de la rue s'élimine ; il ne reste que des angles.
+ *
+ * ── Le ciel que voit chaque mur ─────────────────────────────────────────────
+ *
+ * Intégré sur son plan vertical, à travers l'obstruction du bâtiment d'en face
+ * vu de son pied — deux fois moins haut en angle que vu du piéton.
+ *
+ * ── Les vitrages ────────────────────────────────────────────────────────────
+ *
+ * Une fenêtre renvoie l'image du soleil. Pour un mur vertical de normale n,
+ * l'image se voit à la même hauteur que le soleil, à l'azimut 2n + π − A_s. Elle
+ * existe si le soleil éclaire ce mur, si le mur monte assez haut dans cette
+ * direction, et si le point de réflexion est au-dessus de la ligne d'ombre. Sa
+ * luminance moyenne vaut part vitrée × réflectance de Fresnel × luminance du
+ * disque. C'est le cas typique du soleil **dans le dos** : on ne le voit pas, on
+ * voit son reflet sur la façade d'en face.
+ *
+ * @param {ArrayLike<number>} horizon élévation de l'horizon bâti par secteur, en degrés
+ * @param {number} altitude hauteur du soleil, en radians
+ * @param {number} azimuth azimut du soleil, en radians depuis le nord
+ * @param {object} sky conditions de ciel
+ * @param {number} albedo réflectance de la pierre
+ * @param {number} [glazing] part vitrée des façades
+ */
+export function reverberation(horizon, altitude, azimuth, sky, albedo, glazing = 0) {
+  const bins = horizon?.length ?? 0;
+  const empty = {
+    lux: 0,
+    luminance: 0,
+    sunlitWalls: 0,
+    wallView: 0,
+    sectors: new Float64Array(bins),
+    projected: new Float64Array(bins),
+    images: [],
+  };
+  if (bins === 0) return empty;
+
+  const width = (2 * Math.PI) / bins;
+  const normals = wallGeometry(horizon);
+  const cosSun = Math.cos(azimuth);
+  const sinSun = Math.sin(azimuth);
+  const cosAltitude = Math.cos(altitude);
+  const tanSun = altitude > 0 ? Math.tan(altitude) : 0;
+  const tanSunSide = Math.tan(horizonAt(horizon, azimuth));
+  const diffuseAlbedo = albedo * (1 - glazing);
+
+  const sectors = new Float64Array(bins);
+  const projected = new Float64Array(bins);
+  const sunlitBySector = new Float64Array(bins);
+  let lux = 0;
+  let sunlitWalls = 0;
+  let wallView = 0;
+  let weightedLuminance = 0;
+
+  for (let i = 0; i < bins; i++) {
+    const tanWall = tanDeg(horizon[i]);
+    // Part du champ occupée par du mur dans ce secteur : le complément de cos²β.
+    const share = (tanWall * tanWall) / (1 + tanWall * tanWall);
+    if (share <= 0) continue;
+    wallView += share;
+
+    const normal = normals.angle[i];
+    const facing = cosSun * normals.cos[i] + sinSun * normals.sin[i];
+
+    const seenFromWall = normals.seen[i];
+    const wallReach =
+      sky.distribution?.wallFactorToward(normal, seenFromWall) ??
+      0.5 * Math.pow(Math.cos(seenFromWall * D2R), 2);
+    let irradiated = wallReach * sky.diffuseHorizontal;
+
+    if (facing > 0 && altitude > 0) {
+      const effectiveTanSun = tanSun / Math.max(facing, 0.05);
+      const sunlit =
+        tanWall > 0
+          ? Math.max(0, Math.min(1, 1 - Math.max(0, tanSunSide - effectiveTanSun) / tanWall))
+          : 0;
+      sunlitBySector[i] = sunlit;
+      irradiated += sky.directNormal * cosAltitude * facing * sunlit;
+      sunlitWalls += share * sunlit;
+    }
+
+    // Luminance de la surface, en cd/m² : c'est *elle* qui éblouit, et non
+    // l'éclairement horizontal qu'elle produit.
+    const luminance = (diffuseAlbedo * irradiated) / Math.PI;
+    sectors[i] = luminance;
+    // Angle solide de ce pan de mur projeté sur un plan vertical qui lui ferait
+    // face : ∫₀^β cos²e de = β/2 + sin 2β / 4, fois la largeur du secteur. Le
+    // cosinus du regard s'applique ensuite, cap par cap.
+    const beta = Math.atan(tanWall);
+    projected[i] = luminance * (beta / 2 + tanWall / (2 * (1 + tanWall * tanWall))) * width;
+    lux += share * diffuseAlbedo * irradiated;
+    weightedLuminance += share * luminance;
+  }
+
+  // Reflets du soleil dans les vitrages.
+  const images = [];
+  if (glazing > 0 && altitude > 0 && sky.directNormal > 0) {
+    for (let i = 0; i < bins; i++) {
+      if (!(sunlitBySector[i] > 0)) continue;
+      const normal = normals.angle[i];
+      const facing = cosSun * normals.cos[i] + sinSun * normals.sin[i];
+      if (facing <= 0) continue;
+      const imageAzimuth = 2 * normal + Math.PI - azimuth;
+      const offset = Math.atan2(
+        Math.sin(imageAzimuth - i * width),
+        Math.cos(imageAzimuth - i * width),
+      );
+      if (Math.abs(offset) > width / 2) continue;
+      const tanWall = tanDeg(horizon[i]);
+      if (tanWall <= tanSun) continue;
+      // Le point de réflexion est à tan α / tan β de la hauteur visible du mur ;
+      // l'ombre d'en face en couvre le bas, sur 1 − part éclairée.
+      if (tanSun / tanWall < 1 - sunlitBySector[i]) continue;
+      const cosIncidence = cosAltitude * facing;
+      images.push({
+        azimuth: imageAzimuth,
+        elevation: altitude,
+        normalIlluminance: glazing * glassReflectance(cosIncidence) * sky.directNormal,
+      });
+    }
+  }
+
+  return {
+    lux: lux / bins,
+    /** Luminance moyenne des murs visibles, pondérée par leur part de champ. */
+    luminance: wallView > 0 ? weightedLuminance / wallView : 0,
+    sunlitWalls: sunlitWalls / bins,
+    wallView: wallView / bins,
+    /** Luminance de chaque secteur de mur, en cd/m². */
+    sectors,
+    /** La même, multipliée par l'angle solide projeté du secteur. */
+    projected,
+    /** Images du soleil dans les vitrages. */
+    images,
+  };
+}
+
+/**
+ * Part du sol vu qui partage l'ombre du piéton.
+ *
+ * Elle était posée à la moitié. Elle se dérive : pour un regard horizontal, le
+ * sol à la dépression δ pèse cos²δ dans l'éclairement du plan vertical de l'œil.
+ * Le trottoir sous les pieds — jusqu'à 2 m, la distance à laquelle le piéton est
+ * placé de sa façade — est vu au-delà de δ* = atan(1,6 / 2) = 38,7°, et pèse
+ *
+ *     ∫_{δ*}^{π/2} cos²δ dδ / ∫_0^{π/2} cos²δ dδ = 0,26.
+ *
+ * Le reste, c'est la chaussée devant soi.
+ */
+const NEAR_GROUND_SHARE = (() => {
+  const depression = Math.atan(1.6 / 2);
+  const below = depression / 2 + Math.sin(2 * depression) / 4;
+  return (Math.PI / 4 - below) / (Math.PI / 4);
+})();
+
+/**
+ * Éclairement et luminances d'un lieu, à un instant — tout ce qui ne dépend pas
+ * de la direction du regard.
  *
  * @param {object} p
- * @param {number} p.transmission part du rayonnement direct qui l'atteint (0-1)
- * @param {number} p.svf facteur de vue du ciel (0-1)
+ * @param {number} p.transmission part du rayonnement direct qui atteint le piéton (0-1)
+ * @param {number} p.svf facteur de vue du ciel, feuillage compris (0-1)
  * @param {number} p.altitude hauteur du soleil, en radians
+ * @param {number} [p.azimuth] azimut du soleil, en radians
  * @param {number[]} [p.horizon] profil d'horizon bâti, en degrés par secteur
  * @param {number} [p.cloud] couverture nuageuse (0-1)
- * @param {number} [p.albedo] réflectance des façades
+ * @param {number} [p.albedo] réflectance de la pierre des façades
  * @param {number} [p.groundAlbedo] réflectance du sol de rue
+ * @param {number} [p.glazing] part vitrée des façades
+ * @param {number} [p.wet] mouillage de la chaussée (0-1)
  */
 export function illuminance({
   transmission,
   svf,
   altitude,
-  azimuth,
+  azimuth = Math.PI,
   horizon,
   cloud = 0,
   albedo = 0.45,
   groundAlbedo = DEFAULT_GROUND_ALBEDO,
+  glazing = DEFAULT_GLAZING_RATIO,
   wet = 0,
   sky,
 }) {
   sky ??= skyConditions(altitude, cloud, null, azimuth, horizon?.length ?? 16);
 
   const direct = transmission * sky.directNormal * sky.sinH;
-  // Anisotropie du ciel : ce n'est pas la fraction de voûte visible qui compte,
-  // c'est la luminance de la portion qu'on voit. Une ruelle ne voit que le
-  // zénith — le plus lumineux sous un ciel couvert ; une rue tournée vers le
-  // soleil couchant voit la région circumsolaire, jusqu'à onze fois le fond.
-  const diffuse = skyReach(svf, horizon, sky) * sky.diffuseHorizontal;
+  const foliage = foliageTransmission(svf, horizon);
+  const reach = horizon ? sky.distribution?.factor(horizon) : null;
+  const diffuse = (Number.isFinite(reach) ? reach * foliage : svf) * sky.diffuseHorizontal;
 
   // Sans profil d'horizon — jeu de données antérieur — on retombe sur
   // l'ancienne estimation grossière, qui ignore si les murs sont éclairés.
   const walls = horizon
-    ? reverberation(horizon, altitude, azimuth, sky, albedo)
+    ? reverberation(horizon, altitude, azimuth, sky, albedo, glazing)
     : (() => {
         const flat =
           (1 - svf) * albedo * (sky.directNormal * sky.sinH + sky.diffuseHorizontal) * 0.3;
-        return { lux: flat, luminance: flat / Math.PI, sunlitWalls: 0, wallView: 1 - svf };
+        return {
+          lux: flat,
+          luminance: flat / Math.PI,
+          sunlitWalls: 0,
+          wallView: 1 - svf,
+          projected: null,
+          images: [],
+        };
       })();
 
   // ── Le sol qu'on voit n'est pas celui sur lequel on se tient ───────────────
   //
-  // On prenait la transmission du piéton : à l'ombre d'un immeuble, le sol était
-  // donc réputé sombre. Or on regarde la rue devant soi, sur des dizaines de
-  // mètres, et cette portion-là peut être en plein soleil. Se tenir à l'ombre
-  // face à une chaussée éclairée est un cas courant, et pénible.
-  //
-  // La part ensoleillée de la chaussée se lit dans la même géométrie de canyon
-  // que les façades : un mur d'élévation β vu du milieu de la rue porte une
-  // ombre sur une fraction tan β / (2 tan α) de la largeur.
+  // La part ensoleillée de la chaussée devant soi se lit dans la géométrie de
+  // canyon : un mur d'élévation β vu du milieu de la rue porte une ombre sur une
+  // fraction tan β / (2 tan α) de la largeur.
   const tanAlt = altitude > 0 ? Math.tan(altitude) : 0;
   const groundSunlit =
     horizon && tanAlt > 0
       ? Math.max(0, Math.min(1, 1 - Math.tan(horizonAt(horizon, azimuth)) / (2 * tanAlt)))
       : 0;
-  // Moitié sous les pieds, moitié devant : la première suit ce qui nous ombre,
-  // la seconde la géométrie de la rue.
-  const groundLit = 0.5 * transmission + 0.5 * groundSunlit;
+  const groundLit = NEAR_GROUND_SHARE * transmission + (1 - NEAR_GROUND_SHARE) * groundSunlit;
   const groundDirect = groundLit * sky.directNormal * sky.sinH;
 
   // ── Chaussée mouillée ─────────────────────────────────────────────────────
   //
-  // Une chaussée humide n'est pas une chaussée plus claire : l'eau comble les
-  // pores et la réflectance **diffuse baisse**. Ce qui apparaît, c'est un miroir.
-  //
-  // La réflectance spéculaire de l'eau suit Fresnel, et grimpe brutalement en
-  // incidence rasante — approximation de Schlick, R₀ = 0,02 :
-  //
-  //     R = R₀ + (1 − R₀)·(1 − cos θ)⁵
-  //
-  // À 60° de hauteur de soleil, R vaut 0,02 : rien. À 10°, il vaut **0,40**. Une
-  // rue mouillée sous un soleil bas renvoie donc l'image du disque solaire en
-  // pleine face — l'une des situations les plus pénibles qui soient pour ce
-  // public, et le modèle l'ignorait entièrement.
+  // L'eau comble les pores : la réflectance **diffuse** baisse. Ce qui apparaît,
+  // c'est un miroir, dont la réflectance suit Fresnel et grimpe en incidence
+  // rasante — 0,02 soleil haut, 0,40 à dix degrés.
   const wetness = Math.max(0, Math.min(1, wet));
-  const diffuseAlbedo = groundAlbedo * (1 - 0.3 * wetness);
-  const groundLuminance = (diffuseAlbedo * (groundDirect + diffuse)) / Math.PI;
+  const diffuseGroundAlbedo = groundAlbedo * (1 - 0.3 * wetness);
+  const groundLuminance = (diffuseGroundAlbedo * (groundDirect + diffuse)) / Math.PI;
+  const waterReflectance = fresnel(sky.sinH, 1.333);
+  const specular = wetness * waterReflectance * groundDirect;
 
-  // Le miroir ne renvoie que le faisceau direct, et seulement là où il arrive.
-  const cosIncidence = Math.max(0, sky.sinH);
-  const fresnel = 0.02 + 0.98 * Math.pow(1 - cosIncidence, 5);
-  const specular = wetness * fresnel * groundDirect;
-
-  // Charge lumineuse renvoyée dans les yeux : façades **et** sol.
-  //
-  // Additive, et non moyennée sur le champ de vision. La moyenne était tentante
-  // — c'est la géométrie qui la suggère — mais elle décrit la mauvaise physique :
-  // elle diluait des façades éblouissantes dans un sol sombre et faisait *baisser*
-  // l'indice de deux points au soleil rasant. Or un fond sombre ne soulage pas
-  // d'une source vive ; à luminance égale il l'aggrave, c'est tout le principe de
-  // la luminance de voile déjà employée pour l'éclairage nocturne.
-  //
-  // Le sol entre donc en supplément, à hauteur de la moitié du champ qu'il
-  // occupe, et la luminance des façades reste exactement ce qu'elle était — la
-  // grandeur validée rue par rue.
   // ── Les rebonds suivants ──────────────────────────────────────────────────
   //
-  // Le modèle s'arrêtait à la première réflexion. Dans une rue étroite bordée de
-  // calcaire clair, la lumière renvoyée par une façade éclaire celle d'en face,
-  // qui la renvoie à son tour. La série géométrique classique donne le facteur
-  // d'amplification
-  //
-  //     1 / (1 − ρ̄ · (1 − ψ))
-  //
-  // avec ρ̄ la réflectance moyenne des surfaces et ψ la part de ciel — donc
-  // (1 − ψ) la part de l'hémisphère occupée par des surfaces qui se renvoient la
-  // lumière. En site dégagé le facteur vaut 1 et rien ne change ; rue de la
-  // Colombe, ouverture au ciel de 19 %, il vaut 1,3.
+  // Série géométrique 1 / (1 − ρ̄·(1 − ψ)) : en site dégagé elle vaut 1 ; rue de la
+  // Colombe, ouverture au ciel de 19 %, environ 1,3.
   const enclosure = Math.max(0, Math.min(1, 1 - svf));
-  const meanAlbedo = 0.5 * (albedo + groundAlbedo);
+  const meanAlbedo = 0.5 * (albedo * (1 - glazing) + groundAlbedo);
   const bounces = 1 / Math.max(0.4, 1 - meanAlbedo * enclosure);
 
   const wallLuminance = walls.luminance * bounces;
   const litGround = groundLuminance * bounces;
-
-  // Charge lumineuse renvoyée dans les yeux : façades **et** sol.
-  //
-  // Additive, et non moyennée sur le champ de vision. La moyenne était tentante
-  // — c'est la géométrie qui la suggère — mais elle décrit la mauvaise physique :
-  // elle diluait des façades éblouissantes dans un sol sombre et faisait *baisser*
-  // l'indice de deux points au soleil rasant. Or un fond sombre ne soulage pas
-  // d'une source vive ; à luminance égale il l'aggrave, c'est tout le principe de
-  // la luminance de voile déjà employée pour l'éclairage nocturne.
-  //
-  // Le sol entre donc en supplément, à hauteur de la moitié du champ qu'il
-  // occupe.
-  // Le reflet spéculaire est concentré, donc lumineux : on le compte comme une
-  // luminance à part entière, non dilué dans la moitié de champ du sol diffus.
+  // Charge lumineuse renvoyée dans les yeux, façades et sol : additive, jamais
+  // moyennée — un fond sombre ne soulage pas d'une source vive.
   const surfaceLuminance = wallLuminance + 0.5 * litGround + (specular / Math.PI) * bounces;
-  const altitudeDeg = altitude * (180 / Math.PI);
   const total = direct + diffuse + walls.lux * bounces;
 
   return {
@@ -600,7 +675,7 @@ export function illuminance({
     /** Luminance des seules façades, rebonds compris. */
     wallLuminance,
     groundLuminance: litGround,
-    /** Façades et sol réunis — ce qui pèse réellement sur les yeux. */
+    /** Façades et sol réunis — la charge renvoyée vers les yeux. */
     surfaceLuminance,
     sunlitWalls: walls.sunlitWalls,
     /** Part de la chaussée en vue qui est au soleil. */
@@ -609,146 +684,410 @@ export function illuminance({
     specular,
     /** Amplification due aux réflexions multiples. */
     bounces,
-    /**
-     * Éclairement du ciel et du soleil, pondéré mélanopiquement. C'est la
-     * grandeur qui nourrit la composante de luminosité : les surfaces ont leur
-     * propre composante, les compter ici les compterait deux fois.
-     */
-    melanopic: melanopicIlluminance(direct, diffuse, altitudeDeg, sky.directShare),
-    /** Le même pondération appliquée à l'éclairement total, réflexions comprises. */
-    melanopicTotal: melanopicMix(direct, diffuse, altitudeDeg, sky.directShare) * total,
+    /** Part du ciel au-dessus du bâti que le feuillage laisse passer. */
+    foliage,
+    /** Éclairement horizontal total, en lux. */
     total,
+    // Ce qu'il faut pour la suite — l'éclairement à l'œil.
+    transmission,
+    wetness,
+    waterReflectance,
+    wallProjected: walls.projected,
+    glazingImages: walls.images,
+  };
+}
+
+// ─────────────────────────────────────────────────────────── à l'œil ───────
+
+/** Angle solide du disque solaire, en stéradians (diamètre apparent 0,533°). */
+export const SUN_SOLID_ANGLE = 6.8e-5;
+
+/**
+ * Seuil d'inconfort lumineux de la personne migraineuse entre les crises, en lux.
+ *
+ * Perenboom et al., *Pain* 159 (2018) : 2,64 ± 0,5 log lux chez 39 patients
+ * atteints de migraine épisodique, contre 2,98 chez les témoins. C'est le zéro de
+ * la dose : en dessous, rien ne gêne la personne médiane du public visé.
+ */
+export const DISCOMFORT_THRESHOLD = Math.pow(10, 2.64);
+
+/**
+ * Limites du champ visuel binoculaire, en degrés au-dessus, au-dessous et de
+ * part et d'autre de la ligne de regard : 60°, 75° et 100°, les valeurs
+ * cliniques usuelles de la périmétrie. Entre ces axes, le bord du champ est
+ * pris elliptique — l'« îlot de vision » de Traquair n'est pas un rectangle.
+ *
+ * Ce n'est pas un détail. Avec des limites rectangulaires, un soleil à 60° de
+ * haut et 90° sur le côté restait « visible » ; et comme il n'éclaire alors
+ * presque pas le plan de l'œil, le terme de contraste de la DGP l'aurait rendu
+ * plus éblouissant qu'un soleil de face. Il est en réalité au-dessus de la
+ * tempe, hors du champ.
+ */
+const FIELD = { up: 60, down: 75, side: 100 };
+
+/**
+ * Dispersion du bord du champ d'une personne à l'autre, en degrés — arcade
+ * sourcilière, paupières, forme du visage. Hypothèse déclarée.
+ *
+ * Un bord franc ne convient pas : le terme de sources est logarithmique, et le
+ * soleil y pèse lourd partout où il est visible. À 59,9° droit devant il donnait
+ * 0,66 d'éblouissement, à 60,1° zéro — la carte aurait sauté au passage du
+ * soleil. On rend donc l'**espérance** sur la population : la probabilité que la
+ * source soit dans le champ, bord distribué autour de sa valeur clinique.
+ */
+const FIELD_SPREAD = 5;
+
+/**
+ * Indice de position d'une source, dans la direction (élévation, écart
+ * d'azimut) par rapport à un regard horizontal.
+ *
+ * Au-dessus de la ligne de regard, l'indice de **Guth** dans l'ajustement de
+ * Levin (IES Lighting Handbook) :
+ *
+ *     P = exp[(35,2 − 0,31889·τ − 1,22·e^(−2τ/9))·10⁻³·σ
+ *             + (21 + 0,26667·τ − 0,002963·τ²)·10⁻⁵·σ²]
+ *
+ * avec σ l'écart angulaire à la ligne de regard et τ l'angle, depuis la
+ * verticale, du plan qui contient la source et la ligne de regard. En dessous,
+ * l'indice d'**Iwata** retenu par la CIE (2010) : les sources basses gênent
+ * davantage. C'est le code d'`evalglare`, l'outil de référence de Wienold, à
+ * une différence près : `evalglare` plafonne l'indice à 16. Dans notre champ
+ * l'indice ne dépasse pas 16,4, et ce plafond faisait remonter l'éblouissement
+ * à l'approche du bord — l'indice cessait de croître pendant que l'éclairement
+ * à l'œil, au dénominateur, continuait de baisser.
+ *
+ * L'ancien modèle n'employait que la branche verticale, et remplaçait l'écart
+ * latéral par une rampe en cosinus, plancher à 0,3 compris, posée sans mesure.
+ *
+ * @param {number} elevationDeg hauteur de la source au-dessus du regard, en degrés
+ * @param {number} [lateralDeg] écart d'azimut entre la source et le regard, en degrés
+ */
+export function positionIndex(elevationDeg, lateralDeg = 0) {
+  const e = elevationDeg * D2R;
+  const a = lateralDeg * D2R;
+  const forward = Math.cos(e) * Math.cos(a);
+  const right = Math.cos(e) * Math.sin(a);
+  const up = Math.sin(e);
+  const sigma = Math.acos(Math.max(-1, Math.min(1, forward))) * R2D;
+  if (sigma < 1e-6) return 1;
+  const tau = Math.atan2(Math.abs(right), up) * R2D;
+
+  let p;
+  if (up >= 0) {
+    p = Math.exp(
+      ((35.2 - 0.31889 * tau - 1.22 * Math.exp((-2 * tau) / 9)) / 1000) * sigma +
+        ((21 + 0.26667 * tau - 0.002963 * tau * tau) / 100000) * sigma * sigma,
+    );
+  } else {
+    const s = Math.min(89.9, sigma) * D2R;
+    const beta =
+      Math.atan(Math.tan(s) * Math.sqrt(1 + 0.3225 * Math.pow(Math.cos(tau * D2R), 2))) * R2D;
+    p = Math.exp((6.49 / 1000) * beta + (21 / 100000) * beta * beta);
+  }
+  return p;
+}
+
+/**
+ * Probabilité qu'une source soit dans le champ visuel, de 0 à 1 : le bord
+ * elliptique, adouci par la dispersion entre personnes (loi logistique de même
+ * écart-type).
+ */
+function visibility(elevationDeg, lateralDeg) {
+  const e = elevationDeg * D2R;
+  const a = lateralDeg * D2R;
+  const forward = Math.cos(e) * Math.cos(a);
+  const right = Math.cos(e) * Math.sin(a);
+  const up = Math.sin(e);
+  const eccentricity = Math.acos(Math.max(-1, Math.min(1, forward))) * R2D;
+  if (eccentricity < 1e-6) return 1;
+  // Méridien de la source, depuis la verticale ; bord du champ sur ce méridien.
+  const meridian = Math.atan2(Math.abs(right), Math.abs(up));
+  const vertical = up >= 0 ? FIELD.up : FIELD.down;
+  const limit = 1 / Math.hypot(Math.cos(meridian) / vertical, Math.sin(meridian) / FIELD.side);
+  const scale = (FIELD_SPREAD * Math.sqrt(3)) / Math.PI;
+  return 1 / (1 + Math.exp((eccentricity - limit) / scale));
+}
+
+function wrapDeg(radians) {
+  return Math.atan2(Math.sin(radians), Math.cos(radians)) * R2D;
+}
+
+/**
+ * Lumière qui atteint l'œil d'un piéton regardant dans la direction `heading`.
+ *
+ * ── Pourquoi le plan vertical ───────────────────────────────────────────────
+ *
+ * L'indice reposait sur l'éclairement **horizontal** — celui d'un plan qui
+ * regarde le zénith. Or la lumière qui gêne entre par l'œil, et l'œil regarde
+ * devant lui. La CIE S 026 définit l'éclairement mélanopique au niveau de la
+ * cornée, dans le plan vertical ; et l'éclairement vertical à l'œil est, de
+ * toutes les grandeurs étudiées, le meilleur prédicteur de l'inconfort visuel en
+ * lumière naturelle — c'est le premier terme de la DGP (Wienold &
+ * Christoffersen, 2006), confirmé depuis (Luo et al., 2024).
+ *
+ * L'horizontal surpondérait le soleil de midi et sous-pondérait le soleil bas :
+ * l'inverse de ce qui fait mal. Le terme d'éblouissement compensait après coup.
+ *
+ * ── Les termes ──────────────────────────────────────────────────────────────
+ *
+ *  - le soleil, selon l'angle entre lui et le regard ;
+ *  - le ciel visible devant soi, intégré sur le plan vertical ;
+ *  - chaque secteur de façade, sa luminance multipliée par son angle solide
+ *    projeté : ∫cos²e de · ∫cos(φ − h) dφ ;
+ *  - le sol, qui occupe tout le demi-espace sous la ligne d'horizon : π/2 fois sa
+ *    luminance ;
+ *  - les reflets du soleil — vitrages, chaussée mouillée.
+ *
+ * @returns {{photopic: number, melanopic: number, photophobic: number, glare: number}}
+ *   éclairements en lux ; `glare`, le terme de sources de la DGP, log₁₀(1 + Σ)
+ */
+export function eyeExposure(scene, heading, { altitude, azimuth, horizon, svf, sky }) {
+  const cosAlt = Math.cos(Math.max(0, altitude));
+  const toward = (direction) => Math.max(0, Math.cos(direction - heading));
+
+  const sunFacing = toward(azimuth);
+  const direct = altitude > 0 ? scene.transmission * sky.directNormal * cosAlt * sunFacing : 0;
+
+  const eyeFactor = horizon ? sky.distribution?.eyeFactor(heading, horizon) : null;
+  const skyLux =
+    (Number.isFinite(eyeFactor) ? eyeFactor * scene.foliage : 0.5 * Math.max(0, svf)) *
+    sky.diffuseHorizontal;
+
+  let walls = 0;
+  if (scene.wallProjected && horizon) {
+    const { cos, sin } = sectorTrig(horizon.length);
+    const cosH = Math.cos(heading);
+    const sinH = Math.sin(heading);
+    for (let i = 0; i < horizon.length; i++) {
+      const weight = scene.wallProjected[i];
+      if (!(weight > 0)) continue;
+      const facing = cos[i] * cosH + sin[i] * sinH;
+      if (facing > 0) walls += weight * facing;
+    }
+    walls *= scene.bounces;
+  } else {
+    walls = scene.wallLuminance * Math.PI * 0.5 * (1 - svf);
+  }
+
+  const ground = (scene.groundLuminance * Math.PI) / 2;
+
+  // Les sources ponctuelles : le disque, son reflet dans la chaussée mouillée,
+  // ses reflets dans les vitrages. Chacune avec son éclairement normal.
+  const sources = [];
+  if (altitude > 0 && sky.directNormal > 0) {
+    sources.push({
+      elevation: altitude,
+      azimuth,
+      normalIlluminance: scene.transmission * sky.directNormal,
+    });
+    if (scene.wetness > 0) {
+      sources.push({
+        elevation: -altitude,
+        azimuth,
+        normalIlluminance:
+          scene.wetness * scene.waterReflectance * scene.groundSunlit * sky.directNormal,
+      });
+    }
+    for (const image of scene.glazingImages ?? []) sources.push(image);
+  }
+
+  let reflections = 0;
+  for (const source of sources.slice(1)) {
+    reflections += source.normalIlluminance * Math.cos(source.elevation) * toward(source.azimuth);
+  }
+
+  const photopic = direct + skyLux + walls + ground + reflections;
+  const ratios = sky.melanopic ?? { beam: 1, sky: 1, surfaces: 1 };
+  const melanopic =
+    (direct + reflections) * ratios.beam + skyLux * ratios.sky + (walls + ground) * ratios.surfaces;
+
+  // ── Les sources, à la manière de la DGP ───────────────────────────────────
+  //
+  // Σ L²·ω / P², divisé par E_v^1,87 : la structure du second terme de la
+  // DGP. L'éclairement à l'œil au dénominateur traduit l'adaptation — une
+  // source vive gêne moins sur un fond clair. Pour un disque d'angle solide ω,
+  // L²·ω = E_n² / ω.
+  //
+  // Chaque source n'est vue que par la part de la population dont le champ la
+  // contient : on ajoute donc les sources de la plus vive à la plus faible, et
+  // chacune apporte sa marche de logarithme pondérée par sa visibilité. Une
+  // source seule donne v·log₁₀(1 + X) ; toutes visibles, log₁₀(1 + ΣX).
+  const adaptation = Math.pow(Math.max(1, photopic), 1.87);
+  const terms = [];
+  for (const source of sources) {
+    if (!(source.normalIlluminance > 0)) continue;
+    const elevationDeg = source.elevation * R2D;
+    const lateralDeg = wrapDeg(source.azimuth - heading);
+    const seen = visibility(elevationDeg, lateralDeg);
+    if (seen < 1e-4) continue;
+    const p = positionIndex(elevationDeg, lateralDeg);
+    const x =
+      (source.normalIlluminance * source.normalIlluminance) /
+      SUN_SOLID_ANGLE /
+      (p * p) /
+      adaptation;
+    terms.push([x, seen]);
+  }
+  terms.sort((a, b) => b[0] - a[0]);
+  let glare = 0;
+  let cumulated = 0;
+  for (const [x, seen] of terms) {
+    const before = Math.log10(1 + cumulated);
+    cumulated += x;
+    glare += seen * (Math.log10(1 + cumulated) - before);
+  }
+
+  return {
+    photopic,
+    melanopic,
+    // Le signal qui porte la photophobie : cônes et mélanopsine, la seconde
+    // comptant 1,5 fois (Zele et al.). Exprimé en lux équivalents D65.
+    photophobic: (photopic + 1.5 * melanopic) / 2.5,
+    glare,
   };
 }
 
 /**
- * Éblouissement : le soleil est-il visible, et assez bas pour tomber dans le
- * champ de vision d'un piéton qui regarde devant lui ?
+ * Plafonds de la dose et de l'éblouissement : ce que le modèle peut produire de
+ * pire, en site dégagé, par ciel clair, face au soleil.
  *
- * Au-delà de 50° de hauteur il faut lever la tête pour le voir : la gêne
- * bascule alors vers la luminance générale de la scène, que portent les autres
- * composantes de l'indice. C'est ce terme qui distingue 12 h de 19 h à
- * exposition égale — à midi le soleil cogne d'aplomb, le soir il arrive dans
- * l'axe du regard.
+ * On normalise sur la physique et non sur une valeur choisie : un poids qui ne
+ * veut plus dire ce qu'il dit est pire qu'un poids mal choisi. Calculés une
+ * fois, au premier usage.
+ */
+let ceilings = null;
+function exposureCeilings() {
+  if (ceilings) return ceilings;
+  const bins = 32;
+  const open = new Array(bins).fill(0);
+  let dose = DISCOMFORT_THRESHOLD * 10;
+  let glare = 0.1;
+  for (let deg = 1; deg <= 89; deg += 2) {
+    const altitude = deg * D2R;
+    const sky = skyConditions(altitude, 0, null, Math.PI, bins);
+    const place = { altitude, azimuth: Math.PI, horizon: open, svf: 1, sky };
+    const scene = illuminance({ ...place, transmission: 1 });
+    const eye = eyeExposure(scene, Math.PI, place);
+    dose = Math.max(dose, eye.photophobic);
+    glare = Math.max(glare, eye.glare);
+  }
+  ceilings = { dose, glare };
+  return ceilings;
+}
+
+/**
+ * Dose de lumière à l'œil, de 0 à 1, sur une échelle **logarithmique**.
+ *
+ * McAdams et al. (*PNAS*, 2020) : la gêne déclarée croît linéairement avec le
+ * logarithme du signal — la loi de Weber-Fechner. Zéro au seuil d'inconfort des
+ * migraineux, un au plafond physique.
+ */
+export function doseComponent(photophobicLux) {
+  const ceiling = exposureCeilings().dose;
+  if (!(photophobicLux > DISCOMFORT_THRESHOLD)) return 0;
+  return Math.min(
+    1,
+    Math.log(photophobicLux / DISCOMFORT_THRESHOLD) / Math.log(ceiling / DISCOMFORT_THRESHOLD),
+  );
+}
+
+/**
+ * Éblouissement par les sources vives, de 0 à 1 : le terme log₁₀(1 + Σ) de la
+ * DGP, rapporté au plafond physique.
+ *
+ * @param {number} glareLog terme de sources, déjà en logarithme décimal
+ */
+export function glareComponent(glareLog) {
+  if (!(glareLog > 0)) return 0;
+  return Math.min(1, glareLog / exposureCeilings().glare);
+}
+
+/**
+ * Éblouissement solaire seul, pour un piéton à découvert : la composante
+ * d'éblouissement, réduite au disque et à son reflet sur la chaussée.
+ *
+ * Conservé pour les appelants qui n'ont pas de lieu à décrire.
  */
 export function glareFactor({ transmission, altitude, azimuth, heading, cloud = 0, wet = 0, sky }) {
   if (altitude <= 0 || transmission <= 0) return 0;
   sky ??= skyConditions(altitude, cloud);
-  const altitudeDeg = altitude * (180 / Math.PI);
-  const p = positionIndex(altitudeDeg);
-  const brightness = Math.min(1, sky.directNormal / GLARE_SATURATION);
+  const bins = 32;
+  const place = {
+    altitude,
+    azimuth,
+    horizon: new Array(bins).fill(0),
+    svf: 1,
+    sky: sky.distribution ? sky : skyConditions(altitude, cloud, null, azimuth, bins),
+  };
+  const scene = illuminance({ ...place, transmission, wet });
+  const eye = eyeExposure(scene, Number.isFinite(heading) ? heading : azimuth, place);
+  return glareComponent(eye.glare);
+}
 
-  // L'inconfort décroît comme le carré de l'indice de position : c'est la
-  // structure de l'UGR, où chaque source pèse L²·ω/P².
-  let load = brightness / (p * p);
+/**
+ * Poids de l'indice.
+ *
+ * Trois composantes au lieu de six, et presque indépendantes. Les six d'avant —
+ * soleil direct, ouverture au ciel, luminosité, réverbération, éblouissement,
+ * scintillement — dépendaient presque toutes du faisceau direct : le soleil
+ * pesait en réalité bien plus que les 0,34 annoncés, et deux jeux de poids
+ * plausibles pouvaient inverser le classement de deux rues.
+ *
+ * La dose porte l'essentiel parce que l'éclairement à l'œil est, dans les études
+ * d'inconfort en lumière naturelle, le prédicteur dominant (Wienold 2006 ; Luo
+ * et al. 2024) ; les sources vives viennent ensuite. Le partage chiffré reste un
+ * jugement — c'est le premier endroit à recalibrer avec des retours d'usage.
+ */
+export const DEFAULT_WEIGHTS = {
+  dose: 0.62,
+  glare: 0.3,
+  flicker: 0.08,
+};
 
-  // La chaussée mouillée renvoie l'image du disque solaire, à la même distance
-  // angulaire de la ligne de regard mais **en dessous**. C'est une seconde
-  // source, pondérée par Fresnel — négligeable soleil haut, dominante au ras de
-  // l'horizon, où elle peut presque doubler la gêne.
-  if (wet > 0) {
-    const cosIncidence = Math.max(0, Math.sin(altitude));
-    const fresnel = 0.02 + 0.98 * Math.pow(1 - cosIncidence, 5);
-    load += Math.max(0, Math.min(1, wet)) * fresnel * load;
+/**
+ * Le soleil est-il devant vous, ou dans votre dos ? Sans direction de marche,
+ * on prend le pire cas : le regard tourné vers le soleil.
+ */
+function headingsFor(heading, azimuth) {
+  if (Array.isArray(heading)) {
+    const finite = heading.filter(Number.isFinite);
+    if (finite.length > 0) return finite;
+  } else if (Number.isFinite(heading)) {
+    return [heading];
   }
-
-  return Math.min(1, transmission * (load / GLARE_PEAK) * facingFactor(azimuth, heading));
+  return [Number.isFinite(azimuth) ? azimuth : Math.PI];
 }
 
 /**
- * Maximum du produit « éclat × indice de position » sur la course du soleil.
+ * Composantes de la gêne lumineuse, en un point et un instant.
  *
- * Sans lui, la composante d'éblouissement ne monte plus qu'à 0,12 : le passage à
- * l'indice de Guth a fait chuter le facteur positionnel de plusieurs ordres, et
- * le poids de 0,10 déclaré dans les métadonnées ne pesait plus, en pratique, que
- * 1,3 point sur cent. **Un poids qui ne veut plus dire ce qu'il dit est pire
- * qu'un poids mal choisi** — le README annonce des composantes ramenées entre 0
- * et 1, et c'est ce contrat qu'on rétablit ici.
- *
- * On normalise sur la géométrie, pas sur une valeur inventée : le maximum réel
- * du produit, atteint vers dix degrés de hauteur par ciel clair.
- */
-const GLARE_PEAK = (() => {
-  let peak = 0;
-  for (let deg = 0.25; deg <= 90; deg += 0.25) {
-    const clear = clearSkyIlluminance((deg * Math.PI) / 180);
-    const p = positionIndex(deg);
-    peak = Math.max(peak, Math.min(1, clear.directNormal / GLARE_SATURATION) / (p * p));
-  }
-  return peak;
-})();
-
-/**
- * Indice de position de Guth, pour une source au-dessus de la ligne de regard.
- *
- * Remplace une rampe linéaire coupée à 50°, qui était une invention. L'indice de
- * position est la grandeur normalisée qui dit combien une source gêne *moins*
- * lorsqu'elle s'écarte de l'axe du regard — c'est le P du dénominateur de l'UGR.
- *
- * L'ajustement analytique de Levin (1975) sur les données de Luckiesh & Guth,
- * ici pour un écart purement vertical, la ligne de regard d'un piéton étant
- * horizontale :
- *
- *     P = exp[ (35,2 − 1,22) · 10⁻³ · σ + 21 · 10⁻⁵ · σ² ]
- *
- * L'écart avec l'ancienne rampe est considérable, et dans le bon sens : à 30° de
- * hauteur, la rampe donnait encore 0,4 quand l'indice de position donne 0,09. Un
- * soleil à trente degrés est déjà largement au-dessus du champ utile ; c'est bien
- * le soleil rasant qui fait mal, et le modèle le disait trop mollement.
- *
- * @param {number} elevationDeg hauteur de la source au-dessus du regard, en degrés
- */
-export function positionIndex(elevationDeg) {
-  // Au-delà, la source est hors du champ de vision : l'ajustement n'y est plus
-  // valable, et prolonger l'exponentielle donnerait des nombres absurdes.
-  const sigma = Math.max(0, Math.min(80, elevationDeg));
-  return Math.exp(0.03398 * sigma + 0.00021 * sigma * sigma);
-}
-
-/**
- * Le soleil est-il devant vous, ou dans votre dos ?
- *
- * Marcher vers l'est à huit heures du matin face à un soleil rasant est
- * pénible ; parcourir la même rue vers l'ouest à la même heure ne l'est pas du
- * tout. Sans direction de marche connue — sur la carte, où une rue n'a pas de
- * sens — on ne tranche pas et le terme vaut 1.
- *
- * Le plancher à 0,3 n'est pas de la timidité : soleil dans le dos, le trottoir
- * et les façades d'en face renvoient encore beaucoup de lumière dans les yeux.
- *
- * @param {number} azimuth azimut du soleil, en radians depuis le nord
- * @param {number} heading cap de marche, en radians depuis le nord
- */
-function facingFactor(azimuth, heading) {
-  if (!Number.isFinite(azimuth) || !Number.isFinite(heading)) return 1;
-  return 0.3 + 0.7 * Math.max(0, Math.cos(azimuth - heading));
-}
-
-/**
- * Composantes normalisées (0-1) de la gêne lumineuse, en un point et un instant.
- * Toutes tombent à zéro la nuit — l'éclairage public n'est pas modélisé.
+ * @param {object} p
+ * @param {number|number[]} [p.heading] cap de marche, en radians ; un tableau de
+ *   caps rend le pire d'entre eux — c'est ce que fait la carte, qui ne sait pas
+ *   dans quel sens on prendra la rue.
  */
 export function components({
   transmission,
   svf,
   altitude,
-  azimuth,
+  azimuth = Math.PI,
   heading,
   horizon,
   flicker = 0,
   cloud = 0,
   albedo = 0.45,
   groundAlbedo = DEFAULT_GROUND_ALBEDO,
+  glazing = DEFAULT_GLAZING_RATIO,
   wet = 0,
-  luxReference = 90000,
   veil = 0,
+  weights = DEFAULT_WEIGHTS,
   sky,
 }) {
   // `sky` ne dépend que de l'instant, jamais du lieu : l'appelant qui boucle
   // sur des dizaines de milliers de tronçons a tout intérêt à le calculer une
   // seule fois et à le passer ici.
   sky ??= skyConditions(altitude, cloud, null, azimuth, horizon?.length ?? 16);
-  const lux = illuminance({
+  const scene = illuminance({
     transmission,
     svf,
     altitude,
@@ -756,69 +1095,72 @@ export function components({
     horizon,
     albedo,
     groundAlbedo,
+    glazing,
     wet,
     sky,
   });
+  const place = { altitude, azimuth, horizon, svf, sky };
+
+  // Le pire des caps proposés, au sens de l'indice qu'ils produiraient.
+  const w = { ...DEFAULT_WEIGHTS, ...weights };
+  let worst = null;
+  for (const h of headingsFor(heading, azimuth)) {
+    const eye = altitude > 0 ? eyeExposure(scene, h, place) : null;
+    const dose = eye ? doseComponent(eye.photophobic) : 0;
+    const glare = eye ? glareComponent(eye.glare) : 0;
+    const score = w.dose * dose + w.glare * glare;
+    if (!worst || score > worst.score) worst = { eye, dose, glare, score, heading: h };
+  }
 
   return {
-    sun: altitude > 0 ? transmission * sky.directShare : 0,
-    // Même correction que pour l'éclairement : la gêne due au ciel ne suit pas
-    // la fraction de voûte visible, mais la luminance de ce qu'on en voit.
-    sky:
-      skyReach(svf, horizon, sky) *
-      Math.min(1, Math.pow(sky.diffuseHorizontal / SKY_SATURATION, 0.7)),
-    // `bright` ne retient que ce qui vient du ciel et du soleil ; ce que
-    // renvoient les murs a sa propre composante. Les additionner ici les
-    // compterait deux fois.
-    //
-    // Pondéré par la sensibilité mélanopique : c'est elle qui porte la
-    // photophobie, et le modèle ne l'appliquait qu'aux lampadaires.
-    bright: Math.min(1, Math.pow(lux.melanopic / luxReference, 0.6)),
-    // Murs **et sol** : le sol manquait, alors qu'il occupe la moitié basse du
-    // champ de vision et qu'une chaussée au soleil y atteint 4 000 cd/m².
-    reverb: Math.min(1, Math.pow(Math.max(0, lux.surfaceLuminance) / REVERB_SATURATION, 0.7)),
-    sunlitWalls: lux.sunlitWalls,
-    wallLuminance: lux.wallLuminance,
-    groundLuminance: lux.groundLuminance,
-    glare: glareFactor({ transmission, altitude, azimuth, heading, wet, sky }),
+    // ── Ce qui fait l'indice ──
+    dose: worst.dose,
+    glare: worst.glare,
     // Sans faisceau direct, il n'y a plus d'alternance ombre/soleil : sous un
     // ciel couvert, marcher sous les platanes ne fait plus clignoter la lumière.
     flicker: flicker * sky.directShare,
-    lux: lux.total,
-    /** Éclairement total pondéré mélanopiquement — ce qui compte pour la photophobie. */
-    melanopicLux: lux.melanopicTotal,
-    groundSunlit: lux.groundSunlit,
-    // La gêne nocturne et la part qu'elle occupe. Les deux sont nulles en
-    // plein jour : un jeu de données calculé avant l'éclairage public donne
-    // donc exactement les mêmes chiffres qu'avant.
+    // La gêne nocturne et la part qu'elle occupe, nulles en plein jour.
     night: nightComponent(veil),
     nightShare: nightShare(altitude),
     veil,
+
+    // ── Ce qui l'explique ──
+    /** Part du faisceau direct qui atteint le piéton, pondérée par sa part du global. */
+    sun: altitude > 0 ? transmission * sky.directShare : 0,
+    /** Charge renvoyée par les façades et le sol, ramenée entre 0 et 1. */
+    reverb: Math.min(1, Math.pow(Math.max(0, scene.surfaceLuminance) / 8000, 0.7)),
+    sunlitWalls: scene.sunlitWalls,
+    wallLuminance: scene.wallLuminance,
+    groundLuminance: scene.groundLuminance,
+    groundSunlit: scene.groundSunlit,
+    /** Éclairement horizontal total, en lux. */
+    lux: scene.total,
+    /** Éclairement à l'œil, plan vertical, en lux. */
+    eyeLux: worst.eye?.photopic ?? 0,
+    /** Éclairement mélanopique équivalent D65 à l'œil (CIE S 026), en lux. */
+    melanopicLux: worst.eye?.melanopic ?? 0,
+    /** Signal photophobe, cônes et mélanopsine, en lux équivalents D65. */
+    photophobicLux: worst.eye?.photophobic ?? 0,
+    /** Le cap retenu pour ce qui précède. */
+    heading: worst.heading,
   };
 }
 
 /**
- * Indice de gêne lumineuse, de 0 (abrité) à 100 (plein soleil, ciel ouvert).
+ * Indice de gêne lumineuse, de 0 (abrité) à 100.
  *
- * @param {{sun: number, sky: number, bright: number, flicker: number}} c
- * @param {{directSun: number, skyView: number, brightness: number, flicker: number}} weights
+ * Les poids viennent des métadonnées de la zone. Un jeu calculé avant ce modèle
+ * porte les six poids d'avant, qui ne désignent plus rien ici : on les ignore
+ * plutôt que d'en appliquer la moitié.
  */
 export function discomfortIndex(c, weights) {
+  const w = Number.isFinite(weights?.dose) ? weights : DEFAULT_WEIGHTS;
   const raw =
-    weights.directSun * c.sun +
-    weights.skyView * c.sky +
-    weights.brightness * c.bright +
-    (weights.reverb ?? 0) * (c.reverb ?? 0) +
-    // `?? 0` et non une valeur par défaut : un jeu de données calculé avant
-    // l'ajout de cette composante doit continuer à donner exactement les mêmes
-    // chiffres, plutôt que de dériver en silence.
-    (weights.glare ?? 0) * (c.glare ?? 0) +
-    weights.flicker * (c.flicker ?? 0);
+    w.dose * (c.dose ?? 0) + (w.glare ?? 0) * (c.glare ?? 0) + (w.flicker ?? 0) * (c.flicker ?? 0);
 
   // Le jour et la nuit ne se comparent pas terme à terme : de jour la gêne est
   // une nappe diffuse, de nuit une poignée de sources vives dans un champ
-  // sombre. On ne les additionne donc pas, on passe de l'une à l'autre au
-  // crépuscule — moment où les deux coexistent réellement.
+  // sombre. On passe de l'une à l'autre au crépuscule.
   const share = c.nightShare ?? 0;
   const blended = share > 0 ? raw * (1 - share) + (c.night ?? 0) * share : raw;
 
@@ -828,89 +1170,65 @@ export function discomfortIndex(c, weights) {
 // ───────────────────────────────────────────────────────────── la nuit ─────
 
 /**
- * Luminance de voile au-delà de laquelle on considère la gêne maximale, cd/m².
+ * Rapport mélanopique d'une lampe, d'après sa température de couleur.
  *
- * Calibré sur la distribution mesurée à Paris — voir le README. Une rue
- * résidentielle éclairée par un candélabre tous les 25 m tourne autour de
- * 0,3 cd/m² ; passer sous un luminaire de boulevard dépasse 3.
+ * Calculé sur les fonctions de la CIE S 026 pour un corps noir à cette
+ * température — et non plus lu dans une table de huit points recopiée. C'est
+ * une approximation : une LED n'est pas un corps noir, et deux sources de même
+ * température de couleur peuvent différer dans le bleu. Faute du spectre réel,
+ * c'est le meilleur proxy disponible.
  */
-export const VEIL_SATURATION = 2.5;
-
-/**
- * Rapport mélanopique d'une source, d'après sa température de couleur.
- *
- * ── Pourquoi ce facteur existe ─────────────────────────────────────────────
- * La photophobie n'est pas une affaire de lumens. Elle passe pour l'essentiel
- * par les cellules ganglionnaires à mélanopsine, dont la sensibilité culmine
- * vers 480 nm — dans le bleu. À flux égal, une LED à 4 000 K est nettement plus
- * douloureuse qu'un sodium à 2 000 K, qui n'émet presque pas de bleu. Ignorer
- * la couleur reviendrait à dire que les deux se valent, ce qui est faux pour
- * exactement le public visé.
- *
- * Les valeurs sont les rapports d'efficacité lumineuse mélanopique (melanopic
- * DER, CIE S 026) de corps noirs aux températures indiquées, interpolés
- * linéairement. C'est une approximation : une LED n'est pas un corps noir, et
- * deux sources de même température de couleur peuvent différer dans le bleu.
- * Faute du spectre réel, c'est le meilleur proxy disponible — et il capte le
- * bon ordre de grandeur, un facteur trois entre 2 000 K et 5 000 K.
- */
-const MELANOPIC = [
-  [1800, 0.19],
-  [2000, 0.24],
-  [2700, 0.45],
-  [3000, 0.53],
-  [3500, 0.63],
-  [4000, 0.72],
-  [5000, 0.87],
-  [6500, 1.1],
-];
-
-/**
- * Rapport mélanopique des **phases de lumière du jour** de la CIE (série D).
- *
- * Les corps noirs de la table ci-dessus décrivent bien une lampe, et mal le
- * ciel : au-delà de 5 000 K, la lumière naturelle n'est pas un corps noir mais
- * une phase D, dont le spectre est nettement plus riche dans le bleu à
- * température égale. Prolonger la table des lampadaires jusqu'au ciel revenait à
- * traiter un ciel bleu zénithal comme une LED froide.
- *
- * D65 vaut 1,0 par définition du rapport mélanopique (CIE S 026). Les autres
- * points suivent les phases normalisées : D50 en dessous, D75 et au-delà pour un
- * ciel franc — un ciel bleu profond dépasse 20 000 K et frôle 1,6.
- */
-const DAYLIGHT_MELANOPIC = [
-  [4000, 0.68],
-  [5000, 0.83],
-  [5500, 0.9],
-  [6500, 1.0],
-  [7500, 1.11],
-  [10000, 1.29],
-  [15000, 1.45],
-  [25000, 1.58],
-];
-
-/**
- * Rapport mélanopique d'une source de lumière **naturelle**.
- *
- * Distinct de `melanopicRatio`, qui décrit les lampes : à température de couleur
- * égale, une phase de lumière du jour et un corps noir n'ont pas le même spectre,
- * et l'écart porte justement sur le bleu.
- */
-export function daylightMelanopicRatio(cct) {
-  if (!Number.isFinite(cct)) return 1;
-  return interpolate(DAYLIGHT_MELANOPIC, cct);
+export function melanopicRatio(cct) {
+  return planckMelanopicDER(cct);
 }
 
-export function melanopicRatio(cct) {
-  if (!Number.isFinite(cct)) return 0.53;
-  if (cct <= MELANOPIC[0][0]) return MELANOPIC[0][1];
-  const last = MELANOPIC.at(-1);
-  if (cct >= last[0]) return last[1];
-  for (let i = 1; i < MELANOPIC.length; i++) {
-    const [k1, v1] = MELANOPIC[i];
-    if (cct > k1) continue;
-    const [k0, v0] = MELANOPIC[i - 1];
-    return v0 + ((v1 - v0) * (cct - k0)) / (k1 - k0);
+/**
+ * Facteur photophobe d'une lampe, par lux : cônes et mélanopsine réunis, à la
+ * manière de Zele et al. — la même pondération que pour la lumière du jour.
+ *
+ * Il remplace le seul rapport mélanopique. Entre un sodium à 2 000 K et une LED
+ * à 5 000 K, la mélanopsine seule donnait un facteur 2,9 ; avec les cônes, 1,9.
+ * Les cônes voient aussi la lampe chaude.
+ */
+export function lampPhotophobicRatio(cct) {
+  return photophobicRatio(planckMelanopicDER(cct));
+}
+
+/**
+ * Ce que valait le rapport mélanopique d'une lampe à 2 800 K — la médiane du
+ * parc parisien — dans la table qui servait avant. Il sert à relire les jeux de
+ * données calculés avec elle.
+ */
+const LEGACY_MEDIAN_MELANOPIC = 0.477;
+
+/**
+ * Facteur à appliquer à une luminance de voile **stockée** par un jeu de données
+ * antérieur, pondérée par la mélanopsine seule, pour la ramener à l'échelle
+ * photophobe d'aujourd'hui. Exact pour la lampe médiane, approché pour les
+ * autres ; recalculer la zone supprime l'approximation.
+ */
+export const LEGACY_VEIL_SCALE = lampPhotophobicRatio(2800) / LEGACY_MEDIAN_MELANOPIC;
+
+/**
+ * Luminance de voile au-delà de laquelle on considère la gêne maximale, cd/m².
+ *
+ * Calibrée à 2,5 cd/m² sur la distribution mesurée à Paris, quand la voile était
+ * pondérée par la mélanopsine seule — voir le README. Le passage à la pondération
+ * photophobe relève toutes les voiles d'un même facteur pour la lampe médiane ;
+ * la saturation suit, pour que la distribution — et donc la carte — reste celle
+ * qu'on avait calibrée.
+ */
+export const VEIL_SATURATION = 2.5 * LEGACY_VEIL_SCALE;
+
+function interpolate(table, x) {
+  if (x <= table[0][0]) return table[0][1];
+  const last = table.at(-1);
+  if (x >= last[0]) return last[1];
+  for (let i = 1; i < table.length; i++) {
+    if (x > table[i][0]) continue;
+    const [x0, y0] = table[i - 1];
+    const [x1, y1] = table[i];
+    return y0 + ((y1 - y0) * (x - x0)) / (x1 - x0);
   }
   return last[1];
 }
@@ -976,7 +1294,7 @@ export function veilingLuminance(lamp, distance, eyeHeight = 1.6) {
   // ligne de regard : elle éblouit aussi, d'où la valeur absolue.
   const theta = Math.max(1.5, Math.abs((Math.atan2(rise, distance) * 180) / Math.PI));
 
-  return (10 * illuminanceAtEye * melanopicRatio(lamp.cct)) / (theta * theta);
+  return (10 * illuminanceAtEye * lampPhotophobicRatio(lamp.cct)) / (theta * theta);
 }
 
 /**

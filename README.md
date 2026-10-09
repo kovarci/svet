@@ -7,7 +7,9 @@
 tournent. Puis le même trajet est calculé deux fois : le plus rapide — 29 min,
 indice 38, 35 % au soleil — et le moins exposé — 34 min, indice 21, 10 % au
 soleil. Cinq minutes de plus, seize points d'exposition en moins. Rien n'est mis
-en scène : ce sont les chiffres que l'application affiche.*
+en scène : ce sont les chiffres qu'affichait l'application avant le passage à
+l'éclairement à l'œil (octobre 2026) — les chiffres actuels sont plus bas dans
+cette page, à « Résultat mesuré ».*
 
 [![CI](https://github.com/kovarci/svet/actions/workflows/ci.yml/badge.svg)](https://github.com/kovarci/svet/actions/workflows/ci.yml)
 
@@ -52,8 +54,10 @@ npm test
 ```
 
 Ils vérifient ce qui doit tenir quoi qu'il arrive — l'astronomie contre des
-éphémérides publiées, les bornes et monotonies de l'indice, et surtout
-l'**aller-retour binaire** : ce qu'on écrit est-il ce qu'on relit. C'est ce
+éphémérides publiées, les bornes et monotonies de l'indice, la physique contre
+ses implémentations de référence (ciel clair, partage direct/diffus et spectre
+contre les valeurs de pvlib, efficacités contre les coefficients de `gendaylit`),
+et surtout l'**aller-retour binaire** : ce qu'on écrit est-il ce qu'on relit. C'est ce
 dernier qui manquait le plus. Le format a changé quatre fois, et un décalage
 d'un octet ne plante pas : il décale toutes les séries, et l'application affiche
 des couleurs plausibles et fausses.
@@ -275,7 +279,17 @@ et de définir un indice qui parle de photosensibilité plutôt que de chaleur.
 **Repris** : les méthodes publiées et éprouvées — balayage d'horizon pour le
 facteur de vue du ciel (Ratti & Richens), coordonnées solaires de
 l'*Astronomical Almanac*, atténuation du feuillage par Beer-Lambert,
-nébulosité par Kasten & Czeplak.
+nébulosité par Kasten & Czeplak ; ciel clair d'Ineichen & Perez, partage d'Erbs,
+efficacités lumineuses et ciel « toutes conditions » de Perez, spectre SPCTRL2 de
+Bird & Riordan, fonctions α-opiques de la CIE S 026, structure de la *Daylight
+Glare Probability* de Wienold & Christoffersen, indices de position de Guth et
+d'Iwata. Chaque maillon est éprouvé contre son implémentation de référence —
+pvlib, `gendaylit` et `evalglare` (Radiance).
+
+**Repris de la recherche clinique** : ce qui déclenche la photophobie — cônes et
+mélanopsine réunis (Zele et al. 2021 ; McAdams et al. 2020 ; Noseda et al.
+2016) —, la croissance logarithmique de la gêne (McAdams et al.), et le seuil
+d'inconfort mesuré chez les personnes migraineuses (Perenboom et al. 2018).
 
 **Écrit ici** : l'assemblage Paris, l'indice de gêne lumineuse, et le calcul
 d'itinéraire pondéré par cet indice.
@@ -302,7 +316,7 @@ Tout est ouvert, gratuit, sans compte ni clé d'API.
 | Arbres | [Ville de Paris](https://opendata.paris.fr/explore/dataset/les-arbres/) — `les-arbres` | 219 418 arbres : hauteur, circonférence, genre |
 | Réseau piéton et traversées | [OpenStreetMap](https://www.openstreetmap.org) via Overpass | Trottoirs, rues, passages, escaliers, passages cloutés |
 | Photos aériennes | [IGN BD ORTHO®](https://geoservices.ign.fr/bdortho) + graphe de mosaïquage | 20 cm sur Paris, avec la date de vol — sert à valider les ombres |
-| Nébulosité et UV | [Open-Meteo](https://open-meteo.com) | Prévision horaire (modèle AROME de Météo-France) |
+| Flux, nébulosité, point de rosée, UV | [Open-Meteo](https://open-meteo.com) | Prévision horaire (modèle AROME de Météo-France) |
 | Adresses et lieux | [Nominatim](https://nominatim.openstreetmap.org) | Gares, musées, adresses |
 | Fond de carte | [CARTO](https://carto.com/basemaps) *dark matter* | — |
 
@@ -395,134 +409,147 @@ voit, pas ce qu'elle vaut en luminance. Longtemps le modèle s'en contentait,
 posant `diffus = svf × éclairement diffus` — c'est-à-dire un ciel de luminance
 uniforme. Ce n'est jamais le cas, et l'erreur n'est pas petite.
 
-### 3 bis. Le ciel n'est pas uniforme — ciel général normalisé CIE
+### 3 bis. Le ciel n'est pas uniforme — modèle de Perez
 
 Sous un ciel **couvert**, le zénith vaut environ trois fois l'horizon (Moon &
 Spencer). Une ruelle ne voit qu'une bande de ciel autour du zénith : la partie la
 plus lumineuse. Le facteur de vue du ciel la **sous-estime**.
 
-Sous un ciel **clair**, c'est pire : la luminance culmine autour du soleil — la
-région circumsolaire monte à onze fois le fond de ciel — et remonte vers
-l'horizon. Deux rues de même facteur de vue du ciel, l'une ouverte vers le
-soleil et l'autre à l'opposé, reçoivent des éclairements diffus très différents.
-L'ancien modèle leur donnait la même valeur, à la seconde près.
+Sous un ciel **clair**, c'est pire : la luminance culmine autour du soleil et
+remonte vers l'horizon. Deux rues de même facteur de vue du ciel, l'une ouverte
+vers le soleil et l'autre à l'opposé, reçoivent des éclairements diffus très
+différents. L'ancien modèle leur donnait la même valeur, à la seconde près.
 
-On applique donc le **ciel général normalisé de la CIE** (ISO 15469:2004) :
+La luminance d'un élément de ciel suit la forme du ciel général normalisé CIE
+(ISO 15469:2004) :
 
 ```
-L(Z, χ) / L_z = [ φ(Z) · f(χ) ] / [ φ(0) · f(Z_s) ]
-
-gradation    φ(Z) = 1 + a · exp(b / cos Z)
-indicatrice  f(χ) = 1 + c · [exp(d·χ) − exp(d·π/2)] + e · cos²χ
+L(Z, χ) ∝ [1 + a · exp(b / cos Z)] · [1 + c · exp(d·χ) + e · cos²χ]
 ```
 
-et on l'intègre sur la portion de ciel **réellement visible**, lue dans le profil
-d'horizon de seize secteurs que le pipeline stocke déjà. Trois des quinze types
-normalisés suffisent à encadrer ce qu'on rencontre — couvert (type 1),
-intermédiaire (type 7), clair d'atmosphère polluée (type 12) — choisis en fondu
-d'après la part directionnelle de la lumière, jamais par palier.
+Ses cinq coefficients viennent du **modèle « toutes conditions » de Perez,
+Seals & Michalsky** (*Solar Energy* 50, 1993), qui les calcule depuis les flux
+mesurés : clarté ε, luminosité Δ, hauteur du soleil. C'est le modèle de
+`gendaylit`, dans Radiance, la référence de la simulation d'éclairage naturel ;
+ses coefficients sont recopiés de ce code, avec les deux garde-fous qu'il
+applique.
 
-Deux propriétés en font un raffinement strict plutôt qu'un remplacement :
+Il remplace un fondu entre huit des quinze types CIE, choisi d'après ε seul. La
+luminosité Δ n'y servait pas, alors qu'elle distingue un couvert lumineux d'un
+couvert d'orage à ε égal.
+
+On l'intègre sur la portion de ciel **réellement visible**, lue dans le profil
+d'horizon de trente-deux secteurs que le pipeline stocke déjà. Deux propriétés en
+font un raffinement strict plutôt qu'un remplacement :
 
 - en site dégagé, le facteur vaut **exactement 1** : le niveau annoncé par la
   météo n'est pas déplacé, seule la répartition l'est ;
 - pour un ciel de luminance uniforme, l'intégrale redonne **exactement cos²β**,
   c'est-à-dire le facteur de vue du ciel d'avant.
 
-Aucun recalcul n'est nécessaire : le profil d'horizon était déjà là, on le lit
-mieux. Mesuré sur la zone « centre », 83 306 relevés de trottoir :
+Une seule grille de luminance sert à trois intégrales : le plan horizontal du
+piéton, le plan vertical de chaque façade, et le plan vertical de **l'œil** (voir
+plus bas).
 
-| Heure | Écart absolu moyen | Plus grand écart |
-|---|---|---|
-| 09 h | 1,6 pt | +11 pt |
-| 13 h | 1,9 pt | +14 pt, Port du Louvre (13 → 27) |
-| 19 h | 1,6 pt | +11 pt |
+**Le feuillage était sorti du calcul — c'est réparé.** Le profil d'horizon ne
+relève que le bâti ; le feuillage n'est porté que par le facteur de vue du ciel,
+calculé par Beer-Lambert. En passant au ciel anisotrope, le modèle avait cessé de
+lire ce facteur dès qu'un profil existait. Sous les platanes, le ciel comptait
+donc comme dégagé. Mesuré à profil égal : la composante de ciel restait à 0,453
+pour un facteur de vue de 0,6, de 0,3 ou de 0,1, et l'éclairement *montait* même
+légèrement. La part de ciel qui atteint le piéton est désormais multipliée par
+celle que le feuillage laisse passer — le rapport entre le facteur de vue mesuré
+et celui du seul bâti.
 
-Le quai du Louvre est exactement le cas visé : ouvert plein sud sur la Seine,
-donc droit sur le soleil, et noté comme une rue fermée par l'ancien modèle.
+**Et l'intégration était décalée d'un demi-secteur.** Le profil d'horizon est
+relevé par un rayon tiré exactement à l'azimut du secteur ; le ciel était
+intégré sur `[s, s+1[` au lieu de `[s−½, s+½[`, soit 5,6° à côté de ce qu'on
+prétendait lire.
 
-### 3 ter. Le sol manquait
+Lors du passage au ciel anisotrope (alors sur les types CIE), l'écart mesuré sur
+la zone « centre », 83 306 relevés de trottoir, était de 1,6 à 1,9 point en
+moyenne et jusqu'à 14 points sur le Port du Louvre, ouvert plein sud sur la
+Seine.
 
-Le bilan additionnait le faisceau direct, le ciel et les façades. Pas le sol —
-alors qu'une chaussée ensoleillée à 80 000 lux renvoie près de 4 000 cd/m², du
-même ordre qu'un mur de calcaire au soleil, et qu'elle occupe **toute la moitié
-basse du champ de vision**, celle où l'on regarde en marchant.
+### 3 ter. Le sol
+
+Une chaussée ensoleillée à 80 000 lux renvoie près de 4 000 cd/m², du même ordre
+qu'un mur de calcaire au soleil, et elle occupe **toute la moitié basse du champ
+de vision**, celle où l'on regarde en marchant.
 
 Le sol a sa propre réflectance, 0,18 : l'asphalte est autour de 0,10, un trottoir
 de pierre entre 0,25 et 0,35 — bien plus sombre que les 0,45 des façades.
 
-La charge est **additive**, non moyennée sur le champ de vision. La moyenne était
-tentante, la géométrie la suggérait, mais elle décrit la mauvaise physique :
-elle diluait des façades éblouissantes dans un sol sombre et faisait *baisser*
-l'indice de deux points au soleil rasant. Un fond sombre ne soulage pas d'une
-source vive ; à luminance égale il l'aggrave — c'est le principe même de la
-luminance de voile, déjà employé pour l'éclairage nocturne.
-
-Sur la zone « centre », indice moyen : +3,2 points à 13 h, quand le sol est
-éclairé (2 316 cd/m² en moyenne) ; +0,3 point à 19 h, quand il ne l'est plus
-(415 cd/m²).
+Le sol qu'on voit n'est pas celui sur lequel on se tient. La part qui partage
+l'ombre du piéton était posée à la moitié ; elle se **dérive**. Pour un regard
+horizontal, le sol à la dépression δ pèse cos²δ dans l'éclairement du plan de
+l'œil. Le trottoir sous les pieds — jusqu'à 2 m, la distance à laquelle le piéton
+est placé de sa façade — est vu au-delà de δ* = atan(1,6 / 2) = 38,7°, et pèse
+**26 %**. Le reste est la chaussée devant soi, dont la part ensoleillée se lit
+dans la géométrie de canyon.
 
 ### 4. La réverbération des façades
 
-C'est probablement le terme qui compte le plus pour ce public, et il manquait.
-
 Un mur de calcaire lutétien au soleil, avec 50 000 lux dessus et un albédo de
-0,45, atteint **7 000 cd/m²** — la luminance d'un ciel couvert lumineux. Sauf
-que le mur, lui, est **à hauteur des yeux**, quand le ciel est au-dessus.
-Marcher sur le trottoir à l'ombre face à un mur en plein soleil peut être plus
-pénible qu'être au soleil. Le modèle disait jusqu'ici « vous êtes à l'ombre,
-indice bas ».
+0,45, atteint **7 000 cd/m²** — la luminance d'un ciel couvert lumineux. Sauf que
+le mur, lui, est **à hauteur des yeux**. Marcher sur le trottoir à l'ombre face à
+un mur en plein soleil peut être plus pénible qu'être au soleil.
 
-**Comment savoir si le mur d'en face est éclairé.** Le refaire au lancer de
-rayons à chaque instant coûterait des milliards d'opérations. On s'en sort avec
-de la géométrie de canyon, sur le seul profil d'horizon, qui est statique.
-
-Dans une rue de largeur W, le soleil à la hauteur α passant au-dessus d'un
-bâtiment de hauteur H₁ projette son ombre jusqu'à la hauteur H₁ − W·tan α sur le
-mur d'en face. En posant β₁ et β₂ les élévations d'horizon vues du piéton, la
-part ensoleillée du mur vaut
+**Comment savoir si le mur d'en face est éclairé.** Par la géométrie de canyon,
+sur le seul profil d'horizon. Dans une rue de largeur W, le soleil à la hauteur α
+passant au-dessus d'un bâtiment de hauteur H₁ projette son ombre jusqu'à
+H₁ − W·tan α sur le mur d'en face. En posant β₁ et β₂ les élévations d'horizon
+vues du piéton, la part éclairée du mur vaut
 
 ```
-1 − max(0, tan β₁ − tan α) / tan β₂
+1 − max(0, tan β₁ − tan α_eff) / tan β₂
 ```
 
 **La largeur de la rue s'élimine** : il ne reste que des angles, ceux-là mêmes
-que le balayage d'horizon a déjà relevés.
+que le balayage d'horizon a déjà relevés. α_eff corrige l'obliquité : de biais,
+le rayon traverse la chaussée sur W/cos Δθ au lieu de W, et descend d'autant plus.
 
-Cette écriture supposait le soleil **perpendiculaire** à la rue. De biais, son
-rayon traverse la chaussée sur W/|cos Δθ| au lieu de W, et descend donc d'autant
-plus avant d'atteindre le mur d'en face : l'ombre y monte moins haut. À la
-limite — soleil dans l'axe de la rue — le rayon ne traverse jamais et le mur est
-entièrement éclairé, quelle que soit la hauteur du bâtiment d'en face. C'est le
-cas d'une rue orientée vers le couchant, que le modèle ombrait à tort. La
-correction ne coûte qu'une division : le cosinus de l'angle entre le soleil et la
-normale du mur était déjà calculé pour pondérer l'incidence. Le pipeline stocke donc un profil de
-16 secteurs par trottoir — seize octets — et tout le reste se calcule à
-l'affichage, à n'importe quelle heure.
-
-Le profil est lisible tel quel. Quai de Bourbon, trottoir nord :
+**Les façades regardent la chaussée, pas le piéton.** Le modèle traitait chaque
+secteur d'horizon comme un mur tourné vers le piéton. C'est vrai sur une place
+circulaire, faux dans une rue : le mur qu'on voit en enfilade est le même plan
+que celui d'en face, et sa normale est perpendiculaire à la rue. Conséquence : un
+soleil dans l'axe de la rue éclairait de plein fouet des façades qu'il ne fait
+que raser. L'orientation réelle se lit dans la **forme** du profil : un mur plan
+se voit sous tan β(φ) = (H/W)·cos(φ − θ), et trois secteurs voisins suffisent à
+retrouver θ :
 
 ```
-  0  0  0  0  0 24 68 76 79 80 78 74 63 15  0  0
-  └──── la Seine ────┘ └── les immeubles de l'Île Saint-Louis ──┘
+tan(φ − θ) = (t₋ − t₊) / (t₋ + t₊) · cot δ
 ```
 
-**Le ciel que voit la façade suit la même distribution.** On posait « un mur ne
-voit qu'un demi-ciel », soit 0,5 × E_diffus, pour tous les murs de toutes les
-rues. C'est exact pour un mur isolé sous un ciel uniforme, et faux sur les deux
-points : le bâtiment d'en face lui en masque une bonne part — l'éclairement des
-façades était donc surestimé là où la rue est étroite — et le ciel n'est pas
-uniforme. Une seconde table, intégrée sur un plan **vertical** (`cos Z` devient
-`sin Z · cos φ`, et l'azimut ne balaie qu'un demi-tour), remplace la constante.
-Sous ciel uniforme et sans obstruction elle redonne exactement 0,5 ; par ciel
-clair, deux façades à l'ombre tournées l'une vers le soleil et l'autre à
-l'opposé reçoivent dans un rapport de **trois**.
+Sur un canyon plan, la normale est retrouvée à moins de 2° près.
 
-**Et la grandeur retenue est une luminance, pas un éclairement.** L'éclairement
-horizontal que renvoie un mur ne dépasse pas quelques milliers de lux — un plan
-horizontal regarde le ciel, pas le mur. Ce qui éblouit, c'est la luminance de la
-surface dans le champ de vision. Mesuré sur le terrain modélisé, à 14 h, pour
-des piétons **tous à l'ombre** :
+**Le ciel que voit la façade** est intégré sur son plan vertical, avec la même
+distribution de luminance, à travers l'obstruction du bâtiment d'en face vu de
+son pied — deux fois moins haut en angle que vu du piéton. Sous ciel uniforme et
+sans obstruction, l'intégrale redonne exactement le « demi-ciel » de 0,5
+qu'employait le modèle.
+
+**Les vitrages.** Une façade n'est pas que de la pierre. On pose un quart de
+surface vitrée — l'ordre de grandeur d'un immeuble haussmannien, faute de donnée
+ouverte bâtiment par bâtiment. Ce quart ne renvoie presque rien en diffus,
+l'intérieur est sombre ; en revanche il renvoie le soleil **en miroir**. Pour un
+mur vertical de normale n, l'image du soleil se voit à la même hauteur que lui, à
+l'azimut 2n + π − A_s, avec la réflectance de Fresnel d'un simple vitrage. Elle
+existe si le soleil éclaire ce mur, si le mur monte assez haut dans cette
+direction, et si le point de réflexion est au-dessus de la ligne d'ombre. C'est
+le cas du soleil **dans le dos** : on ne le voit pas, on voit son reflet sur la
+façade d'en face. L'ancien modèle comptait cette situation par un plancher de 0,3,
+posé sans mesure.
+
+**Et la grandeur retenue est une luminance**, multipliée par l'angle solide que
+chaque pan de mur occupe dans le champ de l'œil. Les rebonds suivants — la
+façade éclairée qui éclaire celle d'en face — suivent la série géométrique
+1 / (1 − ρ̄·(1 − ψ)), avec ρ̄ la réflectance moyenne et ψ la part de ciel.
+
+Mesuré avec la version précédente, à 14 h, pour des piétons **tous à l'ombre** —
+ces chiffres datent d'avant la normale réelle et les vitrages, ils montrent
+l'ordre de grandeur de l'effet :
 
 | Rue | Ouverture au ciel | Murs éclairés | Luminance des murs |
 |---|---|---|---|
@@ -531,59 +558,200 @@ des piétons **tous à l'ombre** :
 | Rue de la Colombe | 19 % | 0 % | **1 017 cd/m²** |
 | Avenue Victoria | 37 % | 0 % | 1 017 cd/m² |
 
-Un facteur quatre entre deux situations que l'ancien modèle notait à
-l'identique. Le plancher de 1 017 cd/m² est la lumière du ciel seule.
+### 5. Ce qui arrive dans l'œil — l'indice
 
-### 5. Indice de gêne lumineuse
+L'indice additionnait six composantes : soleil direct, ouverture au ciel,
+luminosité, réverbération, éblouissement, scintillement. Deux défauts de fond :
 
-Six composantes, chacune ramenée entre 0 et 1 :
+- **elles dépendaient presque toutes du faisceau direct.** Le soleil pesait en
+  réalité bien plus que les 0,34 annoncés, et deux jeux de poids plausibles
+  pouvaient inverser le classement de deux rues ;
+- **elles mesuraient la lumière là où elle ne gêne pas.** La luminosité reposait
+  sur l'éclairement *horizontal*, celui d'un plan qui regarde le zénith. Or la
+  lumière qui fait mal entre par l'œil, et l'œil regarde devant lui.
+  L'horizontal surpondère le soleil de midi et sous-pondère le soleil bas,
+  c'est-à-dire l'inverse de ce qui fait mal.
+
+On calcule donc ce qui arrive **à l'œil**, et l'indice n'a plus que trois termes.
+
+#### L'éclairement à l'œil
+
+La CIE S 026 définit l'éclairement mélanopique au niveau de la cornée, dans le
+plan vertical, dans la direction du regard. Et l'éclairement vertical à l'œil
+est, de toutes les grandeurs étudiées, le meilleur prédicteur de l'inconfort
+visuel en lumière naturelle. C'est le premier terme de la *Daylight Glare
+Probability* (Wienold & Christoffersen, *Energy and Buildings* 38, 2006, r² =
+0,94 sur leurs observateurs), et une analyse récente par apprentissage le
+retrouve au premier rang (Luo et al., *Building and Environment*, 2024).
+
+Il se compose de :
+
+- **le soleil**, selon l'angle entre lui et le regard ;
+- **le ciel visible devant soi**, intégré sur le plan vertical à travers le
+  profil d'horizon et le feuillage ;
+- **chaque pan de façade**, sa luminance multipliée par son angle solide
+  projeté ;
+- **le sol**, qui occupe tout le demi-espace sous la ligne d'horizon ;
+- **les reflets du soleil** dans les vitrages et sur la chaussée mouillée.
+
+#### Ce qui déclenche la photophobie : les cônes et la mélanopsine
+
+Le modèle posait que la photophobie passait « pour l'essentiel » par la
+mélanopsine, et pondérait tout par elle seule. Les mesures les plus directes
+disent autre chose :
+
+- **Zele et al.**, *Cephalalgia* 41 (2021) : seuils de photophobie mesurés par
+  électromyographie, en lumière plein champ, sur des lumières étroites qui
+  balaient les deux spectres d'action. Le modèle qui rend compte des seuils
+  **combine** mélanopsine et luminance des cônes, la mélanopsine pesant environ
+  **1,5 fois** plus ;
+- **McAdams et al.**, *PNAS* 117 (2020) : les cônes et la mélanopsine se
+  combinent de la même façon chez les migraineux et chez les témoins ; ce qui
+  diffère est une amplification en aval de la rétine. Et la gêne déclarée croît
+  **comme le logarithme** du signal ;
+- **Noseda et al.**, *Brain* 139 (2016) : le vert aggrave le moins la céphalée,
+  le bleu, l'ambre et le rouge davantage — une composante portée par les cônes,
+  que la mélanopsine seule ne prédit pas.
+
+Le signal retenu est donc celui de Zele, la situation la plus proche de la nôtre
+(lumière continue, plein champ) :
+
+```
+signal = (E_photopique + 1,5 · E_mélanopique) / 2,5
+```
+
+Les deux en lux équivalents D65 : pour la lumière du jour standard, le signal
+égale l'éclairement.
+
+#### Le spectre, calculé et non posé
+
+Le rapport mélanopique de la lumière du jour reposait sur des températures de
+couleur posées à la main — 5 600 K pour le soleil haut, de 6 500 à 16 000 K pour
+le ciel selon une « part directionnelle » maison — puis sur une table de phases
+D. Ni les températures ni la table n'avaient de source.
+
+On calcule désormais les spectres par **SPCTRL2** (Bird & Riordan, *Journal of
+Climate and Applied Meteorology* 25, 1986), le modèle spectral de ciel clair du
+NREL, porté depuis `pvlib`, et on les intègre contre les fonctions de la
+**CIE S 026:2018**. Les tables viennent de leurs sources par un script
+(`pipeline/derive-spectra.mjs`), jamais recopiées à la main. Le portage reproduit
+pvlib à 10⁻⁴ près, longueur d'onde par longueur d'onde, et le faisceau direct
+AM1.5 tombe à 0,866 contre 0,881 pour la référence ASTM G173.
+
+L'épaisseur optique des aérosols se déduit du trouble de Linke par la formule de
+Kasten (Molineaux et al., 1998 ; Ineichen, 2008), inversée. Avec un trouble de 4,
+cela donne 0,22 à 500 nm, la moyenne parisienne.
+
+Ce que ça change, à trouble 4 :
+
+| | ancien | calculé |
+|---|---|---|
+| soleil à 10° | 0,68 | **0,62** |
+| soleil à 60° | 0,91 | 0,87 |
+| ciel clair | 1,39 à 1,44 | **1,11 à 1,16** |
+
+Le ciel parisien est moins bleu que ne le supposait le modèle : les aérosols
+diffusent toutes les couleurs. Sous les nuages, la lumière diffusée par les
+gouttelettes est spectralement neutre. La part couverte du ciel reçoit donc le
+spectre du global clair, et la part dégagée celui du ciel bleu ; le partage suit
+la clarté de Perez.
+
+#### La dose, en logarithme
+
+McAdams et al. le mesurent : la gêne croît linéairement avec le logarithme du
+signal, à la manière de la loi de Weber-Fechner. La dose part donc d'un **seuil
+mesuré** et monte en logarithme :
+
+```
+dose = log(signal / 437 lx) / log(plafond / 437 lx)
+```
+
+- **437 lx** (2,64 log lux) est le seuil d'inconfort lumineux de 39 patients
+  atteints de migraine épisodique, entre les crises (Perenboom et al., *Pain*
+  159, 2018), contre 955 lx chez les témoins. En dessous, rien ne gêne la
+  personne médiane du public visé ;
+- **le plafond** est ce que le modèle peut produire de pire : en site dégagé, par
+  ciel clair, face au soleil. On normalise sur la physique, pas sur une valeur
+  choisie.
+
+#### Les sources éblouissantes, à la manière de la DGP
+
+Le second terme de la DGP somme les sources vives :
+
+```
+log₁₀(1 + Σ L²·ω / (E_v^1,87 · P²))
+```
+
+L, ω et P sont la luminance, l'angle solide et l'indice de position de chaque
+source, E_v l'éclairement à l'œil. Pour le disque solaire et ses reflets,
+L²·ω = E_n²/ω, avec E_n l'éclairement normal qu'ils apportent.
+
+**L'indice de position** est celui de **Guth** au-dessus de la ligne de regard,
+dans l'ajustement de Levin, avec son écart latéral ; et celui d'**Iwata** en
+dessous, retenu par la CIE en 2010 : une source basse — le reflet d'une chaussée
+mouillée — gêne davantage qu'une source haute à la même distance angulaire.
+C'est le code d'`evalglare`, l'outil de référence de Wienold, sauf son plafond à
+16. Dans notre champ, l'indice ne dépasse pas 16,4, et ce plafond faisait
+remonter l'éblouissement à l'approche du bord. L'ancien modèle n'employait que
+la branche verticale et remplaçait l'écart latéral par une rampe en cosinus.
+
+**Le champ visuel** borne les sources : 60° vers le haut, 75° vers le bas, 100°
+de côté — les valeurs cliniques de la périmétrie —, avec un bord elliptique entre
+les deux. Un soleil à 60° de haut et 90° de côté est au-dessus de la tempe. Avec
+des limites rectangulaires, il restait « visible » ; et comme il n'éclaire
+presque pas le plan de l'œil, le dénominateur l'aurait rendu plus éblouissant
+qu'un soleil de face. Le bord varie d'une personne à l'autre : on rend
+l'espérance sur la population, bord distribué sur 5°. Sans cela, le soleil
+passait de 0,66 d'éblouissement à zéro en franchissant 60° de hauteur, et la
+carte aurait sauté.
+
+**L'adaptation est désormais au dénominateur, et c'est un changement de
+décision.** Le modèle s'en abstenait, au motif que l'adaptation serait
+précisément ce qui est altéré chez les personnes photophobes. McAdams et al.
+disent l'inverse pour la rétine : la combinaison des signaux y est la même chez
+les migraineux. Ce qui diffère est une amplification en aval, que la dose porte
+déjà par son seuil abaissé. On reprend donc la structure validée de la DGP
+telle quelle.
+
+#### L'indice
 
 | Composante | Poids | Ce qu'elle capte |
 |---|---|---|
-| **Soleil direct** | 0,34 | Le soleil atteint-il le piéton |
-| **Ouverture au ciel** | 0,18 | Luminance de fond, éblouissement diffus |
-| **Luminosité** | 0,16 | Éclairement reçu du ciel et du soleil |
-| **Réverbération** | 0,14 | Ce que renvoient les façades **et le sol**, à hauteur des yeux |
-| *(chaussée mouillée)* | — | Se raccroche à l'éblouissement, pas à la réverbération : un reflet spéculaire est une source, pas une nappe |
-| **Éblouissement** | 0,10 | Soleil bas dans l'axe du regard — **dépend du sens de marche** |
-| **Scintillement** | 0,08 | Alternance ombre/soleil le long du trajet |
+| **Dose** | 0,62 | Lumière à l'œil, cônes et mélanopsine, en logarithme depuis le seuil d'inconfort |
+| **Sources** | 0,30 | Soleil, reflets dans les vitres et sur la chaussée mouillée, dans le champ visuel |
+| **Scintillement** | 0,08 | Alternance ombre/soleil et moucheté du feuillage |
 
-La luminosité ne retient que ce qui arrive du ciel et du soleil ; ce que
-renvoient les murs a sa propre composante. Les additionner les compterait deux
-fois.
+Les trois termes sont presque indépendants. Leurs **formes** viennent des
+publications ; le partage chiffré, lui, reste un jugement. Il est seulement
+ordonné par la littérature : l'éclairement à l'œil est le prédicteur dominant
+(Wienold 2006 ; Luo et al. 2024), les sources viennent ensuite. Un jeu de
+données calculé avant ce modèle porte six poids qui ne désignent plus rien : on
+retombe alors sur les poids par défaut, plutôt que d'en appliquer la moitié.
 
-**La chaussée mouillée est modélisée.** Une rue humide n'est pas une rue plus
-claire : l'eau comble les pores et la réflectance *diffuse* baisse. Ce qui
-apparaît, c'est un miroir. La réflectance spéculaire suit Fresnel et grimpe en
-incidence rasante — 0,02 à soixante degrés de hauteur de soleil, **0,40 à dix
-degrés**. Une rue mouillée sous un soleil bas renvoie donc l'image du disque
-solaire en pleine face. C'est compté comme une seconde source d'éblouissement, à
-la même distance angulaire du regard mais en dessous, et cela ajoute jusqu'à
-**quatre points d'indice** au ras de l'horizon. Le mouillage se déduit des
-précipitations récentes : une chaussée ne sèche pas à l'instant où la pluie
-cesse, et c'est souvent là que le soleil ressort.
+**Le sens de marche compte, et pas seulement pour l'éblouissement.** Marcher vers
+l'est à huit heures face au soleil rasant n'a rien à voir avec la même rue vers
+l'ouest. Le calcul d'itinéraire connaît le sens ; la carte, non. Elle évalue donc
+les deux sens de la rue, dont l'axe se lit dans le côté du trottoir (« trottoir
+nord », c'est une rue est-ouest), et affiche le pire.
 
-L'éblouissement suit l'**indice de position de Guth**, en 1/P² comme dans l'UGR,
-et non plus une rampe linéaire coupée à 50°. La conséquence la plus visible est
-qu'il ne culmine plus à l'horizon mais **vers dix degrés de hauteur** : au ras du
-sol le disque traverse une vingtaine de masses d'air et se ternit — on peut le
-regarder. À dix degrés il est encore dans l'axe du regard et déjà pleinement
-lumineux. L'ancienne rampe décrivait exactement l'inverse.
+Un exemple, quai est-ouest de l'Île de la Cité, 31 juillet à 14 h, ciel clair,
+soleil à 59° plein sud :
 
-Le terme est **renormalisé sur son propre maximum géométrique**. Sans cela, le
-passage à Guth aurait fait chuter la composante à 0,12 au lieu de couvrir la
-plage 0–1 : le poids de 0,10 annoncé n'aurait plus pesé qu'un point sur cent, et
-la pondération documentée aurait cessé de décrire ce que le modèle applique. Un
-poids qui ne veut plus dire ce qu'il dit est pire qu'un poids mal choisi.
+| Regard | Éclairement à l'œil | Dose | Sources | Indice |
+|---|---|---|---|---|
+| le long du quai | 14 klx | 0,68 | 0 | **42** |
+| face au soleil | 59 klx | 0,94 | 0,38 | **70** |
 
-L'éblouissement est la seule composante qui dépende de la direction : marcher
-vers l'est à huit heures face à un soleil rasant est pénible, parcourir la même
-rue vers l'ouest à la même heure ne l'est pas. Sur la carte, où une rue n'a pas
-de sens de parcours, le terme n'est pas tranché et affiche le cas défavorable ;
-le calcul d'itinéraire, lui, connaît le sens et en tient compte.
+Le long du quai, le soleil est au-dessus de la tempe : ce qui gêne, c'est la
+chaussée et le ciel. L'ancien indice donnait environ 74 dans les deux cas.
 
-Les poids vivent dans les métadonnées de chaque zone, et **ne dépendent d'aucune
-donnée calculée** : les modifier ne demande aucun recalcul du pipeline.
+**La chaussée mouillée** reste modélisée, et mieux. Une rue humide n'est pas une
+rue plus claire : l'eau comble les pores et la réflectance *diffuse* baisse. Ce
+qui apparaît, c'est un miroir, dont la réflectance suit Fresnel — formule exacte
+désormais, et non l'approximation de Schlick — et grimpe en incidence rasante :
+0,02 à soixante degrés de hauteur de soleil, **0,39 à huit degrés**. C'est une
+source à part entière, sous la ligne de regard, donc pesée par l'indice d'Iwata.
+Le mouillage se déduit des précipitations récentes.
 
 Le scintillement mérite un mot : marcher sous un alignement de platanes produit
 une stroboscopie lente. Elle reste sous la bande classique de la
@@ -602,13 +770,12 @@ On ne mesure donc pas la fréquence, mais la **propension du houppier à trouer 
 lumière**. Sous un couvert de transmission moyenne T, la lumière au sol est un
 damier dont la variance vaut T(1 − T) : nulle sous un feuillage transparent, nulle
 sous une ombre pleine et uniforme, **maximale à mi-chemin**. Et l'on ne compte que
-ce qui est ombré par du feuillage — l'ombre d'un immeuble ne scintille pas. Le
-lancer de rayons distinguait déjà les deux, en renvoyant `blocker: 'canopy'` ou
-`'surface'` ; cette information était jetée à la sortie.
+ce qui est ombré par du feuillage — l'ombre d'un immeuble ne scintille pas.
 
-Les poids sont dans [`pipeline/src/config.js`](pipeline/src/config.js) et se
-changent en une ligne. Ils encodent un jugement, pas une mesure : **c'est le
-premier endroit à recalibrer** avec des retours d'utilisateurs réels.
+Les poids sont dans [`pipeline/src/model.js`](pipeline/src/model.js)
+(`DEFAULT_WEIGHTS`) et voyagent dans les métadonnées de chaque zone : les modifier
+ne demande aucun recalcul du pipeline. **C'est le premier endroit à recalibrer**
+avec des retours d'utilisateurs réels.
 
 L'indice n'est pas une mesure. Il répond à « cet endroit est-il plus exposé que
 cet autre », pas à « combien de lux exactement ».
@@ -616,17 +783,18 @@ cet autre », pas à « combien de lux exactement ».
 ### 6. Météo et indice UV
 
 Le pipeline ne stocke que des grandeurs qui dépendent de la géométrie :
-transmission, facteur de vue du ciel, scintillement. Éclairement, éblouissement,
-indice et UV se recomposent **à l'affichage**. C'est ce qui permet d'appliquer la
-prévision du jour, de retoucher les pondérations ou de bouger le curseur horaire
-sans relancer une seule minute de calcul.
+transmission, facteur de vue du ciel, profil d'horizon, scintillement.
+Éclairement à l'œil, éblouissement, indice et UV se recomposent **à
+l'affichage**. C'est ce qui permet d'appliquer la prévision du jour, de retoucher
+les pondérations ou de bouger le curseur horaire sans relancer une seule minute
+de calcul.
 
 **Les flux sont pris tels que le modèle météo les calcule**, et non déduits de
-la nébulosité. C'est une correction majeure : « 100 % de couverture nuageuse »
-est une moyenne horaire sur une maille, qui ne dit pas si le disque solaire est
-masqué à cet instant. Mesuré sur une journée parisienne, la déduction se
-trompait de **27 klx en moyenne, toujours dans le sens de la sous-estimation** —
-le pire sens possible pour ce public.
+la nébulosité. « 100 % de couverture nuageuse » est une moyenne horaire sur une
+maille, qui ne dit pas si le disque solaire est masqué à cet instant. Mesuré sur
+une journée parisienne, la déduction se trompait de **27 klx en moyenne,
+toujours dans le sens de la sous-estimation** — le pire sens possible pour ce
+public.
 
 | Heure | Nébulosité | Déduit | Flux du modèle | Écart |
 |---|---|---|---|---|
@@ -634,31 +802,57 @@ le pire sens possible pour ce public.
 | 15:00 | 96 % | 0,8 klx | 24,2 klx | −97 % |
 | 18:00 | 100 % | **0 klx** | **56,2 klx** | −100 % |
 
-Open-Meteo expose `direct_normal_irradiance` et `diffuse_radiation` en W/m² ; on
-les convertit en lux par l'efficacité lumineuse (105 lm/W pour le faisceau,
-120 pour le ciel diffus, plus bleu donc plus proche du pic de sensibilité de
-l'œil). Le bandeau indique « mesuré » quand ces flux sont disponibles. La
-déduction par Kasten & Czeplak ne sert plus que de repli hors ligne.
+Toute la chaîne radiative suit désormais des modèles publiés, et chacun est
+éprouvé contre une implémentation de référence :
+
+| Maillon | Modèle | Vérifié contre |
+|---|---|---|
+| Ciel clair | Ineichen & Perez, *Solar Energy* 73 (2002) | `pvlib.clearsky.ineichen`, à 0,1 W/m² |
+| Partage direct/diffus hors ligne | Erbs, Klein & Duffie, *Solar Energy* 28 (1982) | `pvlib.irradiance.erbs`, à 10⁻⁶ |
+| Watts → lux | efficacités de Perez et al., *Solar Energy* 44 (1990) | coefficients de `gendaylit` |
+| Clarté ε, luminosité Δ | Perez (1990), sur les flux énergétiques | définitions de `gendaylit` |
+| Trouble de Linke relu dans le faisceau | inverse d'Ineichen-Perez | aller-retour exact |
+| Eau précipitable | exp(0,07·T_rosée − 0,075), Perez (1990) | — |
+
+Trois corrections en sortent :
+
+- **les efficacités lumineuses** valaient 105 et 120 lm/W en toute
+  circonstance. Celle du faisceau chute pourtant au soleil rasant, quand le
+  spectre rougit — environ 40 lm/W à 5° de hauteur, 103 à 60° —, et celle du
+  ciel dépend de ce qui le compose. Le point de rosée, désormais demandé à
+  Open-Meteo, donne l'eau précipitable dont elles dépendent ;
+- **ε et Δ** se calculaient sur des lux, chacun converti avec sa propre
+  efficacité. Le rapport s'en trouvait déplacé, et Δ — normalisé par un
+  extraterrestre en lux — l'était de 20 %. Perez les définit sur les
+  irradiances, et ses coefficients ont été ajustés ainsi ;
+- **hors ligne**, le faisceau était posé en (1 − N)^1,5, exposant sans source. On
+  part maintenant du ciel clair d'Ineichen-Perez, atténué par Kasten & Czeplak
+  (1980), puis partagé par Erbs. Le trouble du jour n'est relu dans le faisceau
+  que par ciel clair : un nuage devant le disque éteint le faisceau sans rien
+  dire de l'atmosphère.
 
 La nébulosité ne se contente pas d'assombrir la carte : **elle en change le
 classement**. Sous un ciel couvert, éviter le soleil n'a plus de sens — mais une
 rue étroite protège toujours de la luminance du ciel, qui devient la seule
-source.
+source. Soleil à 50° de hauteur, rue est-ouest, pire des deux sens :
 
 | Nébulosité | Part directe | Ruelle à l'ombre | Rue au soleil | Place dégagée |
 |---|---|---|---|---|
-| 0 % | 86 % | 10 | 66 | 74 |
-| 50 % | 30 % | 12 | 40 | 54 |
-| 89 % | 3 % | 11 | 22 | 38 |
-| 100 % | 0 % | 9 | 17 | 32 |
+| 0 % | 78 % | 20 (2,2 klx) | 51 (30 klx) | 53 (36 klx) |
+| 50 % | 62 % | 23 (2,9 klx) | 49 (26 klx) | 53 (35 klx) |
+| 89 % | 8 % | 24 (3,5 klx) | 39 (12 klx) | 47 (23 klx) |
+| 100 % | 1 % | 19 (2,2 klx) | 30 (6 klx) | 39 (12 klx) |
+
+Entre parenthèses, l'éclairement à l'œil. La ruelle reçoit un peu *plus* sous un
+voile qu'en plein soleil : le ciel nuageux est plus lumineux que le ciel bleu, et
+c'est lui seul qu'elle voit.
 
 **L'UV se partage entre direct et diffus selon la hauteur du soleil**, et non
 plus par deux constantes. Le partage valait 0,45 / 0,55 en toute situation : à
 peu près juste par soleil haut et ciel clair, franchement faux ailleurs. À 10° de
 hauteur, le trajet atmosphérique est tel que plus de 85 % de l'UV est déjà
-diffusé — se mettre à l'ombre d'un immeuble n'en protège presque plus. La
-constante affirmait le contraire. Sous la couche, la part directe tombe à zéro,
-en UV comme en visible.
+diffusé — se mettre à l'ombre d'un immeuble n'en protège presque plus. Sous la
+couche, la part directe tombe à zéro, en UV comme en visible.
 
 C'est l'écart le plus marqué entre l'UV et la lumière visible, et il tient à la
 physique : la diffusion de Rayleigh varie en λ⁻⁴, donc l'ultraviolet est bien
@@ -712,24 +906,31 @@ qu'à 1 m il passe **sous** l'horizon et n'éblouit plus.
 
 #### La couleur, pas seulement les lumens
 
-C'est le point qui distingue ce modèle d'un calcul d'éclairement ordinaire. La
-photophobie passe pour l'essentiel par les cellules ganglionnaires à
-mélanopsine, dont la sensibilité culmine vers 480 nm — dans le bleu. **À flux
-égal, une LED à 4 000 K est nettement plus douloureuse qu'un sodium à 2 000 K.**
+C'est le point qui distingue ce modèle d'un calcul d'éclairement ordinaire. **À
+flux égal, une LED à 4 000 K est plus douloureuse qu'un sodium à 2 000 K.**
 Ignorer la couleur reviendrait à dire qu'elles se valent, ce qui est faux pour
 exactement le public visé.
 
-Chaque source est donc pondérée par son rapport mélanopique, interpolé sur les
-valeurs CIE S 026 : 0,24 à 2 000 K, 0,53 à 3 000 K, 0,72 à 4 000 K, 1,10 à
-6 500 K. C'est une approximation — une LED n'est pas un corps noir — mais elle
-capte le bon ordre de grandeur, un facteur trois entre 2 000 et 5 000 K.
+Chaque source est pondérée par le même **signal photophobe** que la lumière du
+jour — cônes et mélanopsine, la seconde comptant 1,5 fois (Zele et al., voir
+plus haut). Le rapport mélanopique de chaque lampe est calculé sur les fonctions
+de la CIE S 026, pour un corps noir à sa température de couleur : 0,29 à
+2 000 K, 0,53 à 3 000 K, 0,71 à 4 000 K, 0,99 à 6 500 K. Il était lu dans une
+table recopiée de huit points, qui annonçait un facteur trois entre 2 000 et
+5 000 K ; le calcul donne 2,88. C'est une approximation — une LED n'est pas un
+corps noir — mais elle capte le bon ordre de grandeur.
+
+Avec les cônes, l'écart entre lampe chaude et lampe froide se resserre : un
+facteur 1,6 au lieu de 2,9 entre 2 000 et 5 000 K. Les cônes voient aussi la
+lampe chaude, et c'est ce que mesurent Zele et al.
 
 Contre-intuitivement, **Paris s'en tire bien** : la conversion aux LED s'est
 faite en blanc chaud. Médiane 2 800 K, et seulement 2,9 % du parc à 4 000 K.
 
 #### Le calage
 
-La saturation a été choisie sur la distribution mesurée, pas au jugé :
+La saturation a été choisie sur la distribution mesurée, pas au jugé, quand la
+voile était pondérée par la mélanopsine seule :
 
 | saturation | p05 | médiane | p95 | étalement interquartile | part saturée |
 |---|---|---|---|---|---|
@@ -739,10 +940,16 @@ La saturation a été choisie sur la distribution mesurée, pas au jugé :
 | 6 | 17 | 32 | 64 | 16 | 0,5 % |
 
 2,5 cd/m² donne le meilleur étalement entre deux rues ordinaires pour une part
-saturée acceptable. Repère physique : la CIE limite l'accroissement de seuil à
-15 % en éclairage routier, soit environ **0,20 cd/m²** pour un conducteur. Un
-piéton est moins adapté à la lumière, et ce public l'est encore moins — placer
-la saturation à douze fois le seuil du conducteur est défendable, mais **elle
+saturée acceptable. Le passage à la pondération photophobe relève la voile de la
+lampe médiane d'un facteur 1,45 ; la saturation suit, à 3,62 cd/m², pour que la
+lampe médiane garde exactement sa place sur l'échelle calibrée. Une zone
+calculée avant ce changement porte une voile pondérée à l'ancienne : l'affichage
+la relève du même facteur, ce qui est exact pour la lampe médiane et approché
+pour les autres. Recalculer la zone supprime l'approximation.
+
+Repère physique : la CIE limite l'accroissement de seuil à 15 % en éclairage
+routier, soit environ **0,20 cd/m²** pour un conducteur. Un piéton est moins
+adapté à la lumière, et ce public l'est encore moins — mais **la saturation
 n'est pas plus calibrée sur des personnes que les poids diurnes.**
 
 #### Ce qui n'est pas modélisé
@@ -961,10 +1168,10 @@ choix d'itinéraire.
 
 ### Les passages brutaux
 
-Le modèle ignore l'adaptation de l'œil, et c'est délibéré (voir les limites,
-point 12). Reste que la **mémoire** manque vraiment : sortir d'une rue à l'ombre
-en plein soleil ne se vit pas comme y arriver progressivement, et un itinéraire
-*est* une succession.
+Le modèle tient compte de l'adaptation de l'œil à l'instant — c'est le
+dénominateur de la DGP —, pas de sa **mémoire** (voir les limites, point 12). Or
+la mémoire manque vraiment : sortir d'une rue à l'ombre en plein soleil ne se
+vit pas comme y arriver progressivement, et un itinéraire *est* une succession.
 
 L'introduire dans le calcul retirerait à Dijkstra la propriété qui le rend
 correct — le coût d'une arête dépendrait du chemin parcouru pour l'atteindre. Le
@@ -992,194 +1199,35 @@ personne.
 ### Résultat mesuré
 
 Gare Saint-Lazare → Musée du Louvre, 31 juillet à 14 h, ciel clair, sur la zone
-`centre` (75 638 nœuds, 92 530 arêtes, composante principale 97 %) :
+`centre`. Les deux modèles sont rejoués sur le même graphe et les mêmes points de
+départ et d'arrivée :
 
-| α | Durée | Distance | Indice moyen | Au soleil | Calcul |
+| α | Durée | Distance | Indice moyen | Au soleil | Indice, modèle précédent |
 |---|---|---|---|---|---|
-| 0 (le plus rapide) | 28 min | 2,23 km | 33 | 30 % | 48 ms |
-| 0,5 | 28 min | 2,24 km | 29 | 24 % | 17 ms |
-| 1,5 (défaut) | 29 min | 2,33 km | **24** | **17 %** | 20 ms |
-| 4 | 29 min | 2,35 km | 23 | 17 % | 29 ms |
+| 0 (le plus rapide) | 33 min | 2,52 km | 41 | 37 % | 40 |
+| 0,5 | 34 min | 2,34 km | 35 | 18 % | 22 |
+| 1,5 (défaut) | 36 min | 2,51 km | **28** | **10 %** | 19 |
+| 4 | 36 min | 2,52 km | 27 | 9 % | 19 |
 
-Une minute et cent mètres de plus, et le temps passé en plein soleil tombe de
-30 % à 17 %. La feuille de route indique le côté à emprunter :
+Trois minutes de plus, et le temps passé en plein soleil tombe de 37 % à 10 %.
+L'écart d'indice entre les deux trajets est plus faible qu'avec le modèle
+précédent : l'ombre n'est plus « gratuite ». Le ciel, les façades et la chaussée
+y envoient encore de la lumière à l'œil, et c'est exact.
+
+Le calcul prend 0,3 à 0,4 s en Node, contre 0,2 s : l'éclairement à l'œil coûte
+environ 8 µs par trottoir, contre 5 µs pour l'ancien indice.
+
+La feuille de route indique le côté à emprunter quand il y en a deux :
 
 ```
-    409 m  Cheminement                            [indice 18]
-      5 m  Traversée                              [indice 67]
-     53 m  Rue du Havre — côté ouest              [indice 39]
-    457 m  Rue Auber — côté sud-ouest             [indice 28]
-    100 m  Place de l'Opéra — côté ouest          [indice 54]
-    297 m  Avenue de l'Opéra — côté ouest         [indice 14]
+    291 m  Cheminement                            [indice 9]
+     52 m  Rue du Havre                           [indice 50]
+     11 m  Traversée                              [indice 41]
+     61 m  Rue du Havre                           [indice 67]
+     76 m  Rue Auber                              [indice 30]
+     35 m  Rue des Mathurins                      [indice 17]
     ...
 ```
-
----
-
-## Le guidage
-
-Une fois l'itinéraire calculé, **Démarrer le guidage** suit la position réelle
-et annonce les manœuvres, à la manière d'un GPS piéton — avec deux différences
-qui tiennent au propos de l'application.
-
-**Chaque consigne porte le trottoir.** « Tournez à droite — Rue Auber /
-Trottoir sud-ouest ». Un changement de côté n'est annoncé que là où OSM
-cartographie une traversée : « Traversez ». Sans ça, « marchez côté nord »
-resterait un conseil qu'on ne saurait pas appliquer.
-
-**L'heure passe en temps réel.** Pendant qu'on marche, le soleil tourne
-vraiment ; garder le curseur figé sur l'heure choisie au moment du calcul
-donnerait des ombres fausses au bout de vingt minutes. Le bandeau affiche aussi
-l'exposition à l'endroit précis où l'on se trouve, pas la moyenne du trajet.
-
-La carte s'oriente dans le sens de la marche et suit la position ; toucher la
-carte rend la main, le bouton **Suivre** la reprend. Au-delà de 35 m du tracé,
-l'application propose de recalculer depuis la position courante.
-
-Trois détails ont demandé une correction, chacun invisible en théorie et
-flagrant à l'usage :
-
-- **Un seul trottoir par rue.** Le calcul d'itinéraire choisit le côté le moins
-  exposé tronçon par tronçon, ce qui donnait « Rue Auber, trottoir sud-ouest,
-  puis nord-est, puis sud-ouest » en trois cents mètres. Personne ne traverse
-  deux fois pour cinquante mètres d'ombre. On retient désormais le côté qui
-  l'emporte sur la plus grande longueur de la rue — les traversées coupent les
-  portions, puisque changer de côté après avoir traversé, ça, c'est applicable.
-  Le trajet Saint-Lazare → Louvre passe de 30 manœuvres à 21.
-- **Progression forcée monotone.** Avec un bruit GPS de ± 6 m, la position
-  recalée reculait jusqu'à 10 m d'une mesure à l'autre, et la distance à la
-  prochaine manœuvre remontait par à-coups. On n'autorise le recul que s'il
-  dépasse 25 m : à ce stade ce n'est plus du bruit, c'est un demi-tour.
-- **Caméra.** Une animation de 700 ms relancée à chaque position n'était jamais
-  jouée qu'en partie : la caméra rampait loin derrière. Elle est ramenée à
-  400 ms, sous la seconde d'un GPS ordinaire, et saute au-delà de 150 m. Et
-  quand le système annonce `prefers-reduced-motion`, elle ne glisse plus du
-  tout : elle saute. La feuille de style respectait déjà la préférence, mais
-  elle ne peut rien sur MapLibre, dont les déplacements sont pilotés en
-  JavaScript — or c'est là qu'est le mouvement le plus présent de
-  l'application, une glissade par seconde pendant toute la marche.
-
-**L'écran ne s'éteint plus.** C'était le plus gros écart entre ce que
-l'application promet et ce qu'elle fait dehors : un guidage piéton se consulte
-par coups d'œil, et au bout de trente secondes sans toucher l'écran le téléphone
-se verrouille — l'annonce suivante tombe dans le vide. Un verrou d'écran
-(`WakeLock`) est pris au démarrage du guidage et rendu à l'arrêt. Il est **perdu
-à chaque passage en arrière-plan**, sans erreur ni message : c'est le
-comportement normal de l'interface, et il faut donc le redemander au retour,
-sans quoi il ne tient que jusqu'au premier appel reçu. Un refus — batterie
-faible, économiseur d'énergie, navigateur qui ne connaît pas cette API — ne dit
-rien à l'écran : le guidage fonctionne quand même, il faut seulement rallumer.
-
-**Le bandeau ne parle plus au lecteur d'écran pour ne rien dire.** La zone
-vivante portait sur la section entière, si bien que la distance restante et
-l'exposition — réécrites à chaque point GPS, soit une fois par seconde — se
-faisaient annoncer en boucle et noyaient la consigne, qui est la seule chose
-qu'on ait besoin d'entendre. Elle porte désormais sur la consigne seule. Et
-restreindre la portée ne suffisait pas : une zone vivante annonce sur
-**mutation du DOM**, pas sur changement de valeur, si bien que réécrire la même
-phrase la faisait relire. On n'écrit donc plus un texte identique à celui qui
-est déjà là.
-
-**Un passage brutal de l'ombre au plein soleil est annoncé trente mètres
-avant** — une vingtaine de secondes, de quoi sortir des lunettes ou baisser les
-yeux, ce qui est tout ce qu'on peut faire. Voir « Les passages brutaux », plus
-haut.
-
-### Les annonces vocales
-
-**Ce n'est pas un confort.** Demander à quelqu'un que la lumière fait souffrir
-de fixer un écran de téléphone en plein soleil est une contradiction du même
-ordre qu'une interface blanche. Le guidage parle, et vibre, pour qu'on puisse
-marcher **téléphone dans la poche**.
-
-Chaque manœuvre est annoncée à trois paliers — 180 m, 60 m, 18 m — chacun une
-seule fois. La distance vient **avant** l'action, parce qu'on ne peut pas
-anticiper un ordre qu'on entend après coup :
-
-```
-« Itinéraire de 2 322 mètres, environ 29 minutes. Départ. »
-« Dans 200 mètres, tournez à droite, Rue Auber, trottoir sud-ouest. »
-« Dans 50 mètres, traversez vers Avenue de l'Opéra. »
-« Vous êtes arrivé. »
-```
-
-Les distances s'arrondissent — personne n'entend « quarante-sept mètres ». Une
-vibration double accompagne la manœuvre imminente, une vibration simple les
-annonces lointaines, et un motif long l'écart de trajet. Le bouton 🔊 coupe tout.
-
-`SpeechSynthesis` est natif et gratuit. Sur iOS la synthèse exige un premier
-geste de l'utilisateur : c'est le clic sur « Démarrer le guidage » qui la
-débloque. La vibration n'existe pas depuis le web sur iOS.
-
-### Hors ligne
-
-Un guidage qui s'arrête parce que le réseau tombe ne sert à rien — couloir de
-correspondance, rue mal couverte, forfait épuisé. Un service worker met en cache
-la coquille, les données de zone et les tuiles du fond de carte. Trois régimes,
-selon ce que coûte une donnée périmée :
-
-| | Stratégie | Pourquoi |
-|---|---|---|
-| Index des zones | **réseau d'abord** | Il porte l'horodatage qui version tout le reste |
-| Données de zone | cache d'abord, **URL horodatée** | Volumineuses, ne changent qu'au recalcul |
-| Coquille, fond de carte | cache d'abord, rafraîchi en fond | Ouverture instantanée |
-| Météo, géocodage | réseau uniquement | Une prévision d'hier serait pire qu'aucune |
-
-Le versionnage n'est pas un détail : mettre les données de zone en « cache
-d'abord » sans horodatage rendait **toute reconstruction du pipeline
-invisible** — le défaut s'est manifesté sur le premier recalcul suivant. Chaque
-zone porte donc l'horodatage de son calcul dans `zones.json`, repris en
-paramètre d'URL ; et `zones.json` lui-même est toujours revalidé, sans quoi il
-figerait la chaîne entière.
-
-#### Préparer un secteur, plutôt que l'espérer
-
-Le service worker met en cache ce qu'on lui a **déjà demandé**. C'est ce qu'il
-faut pour qu'une coupure en pleine marche ne casse rien, mais ça ne permet pas
-de *préparer* une sortie : pour être sûr d'avoir un quartier hors ligne, il
-fallait l'avoir parcouru à l'écran, tuile par tuile, avant de partir. Autant dire
-que personne ne le faisait.
-
-Le bouton **Hors ligne** télécharge le secteur affiché : les relevés — le binaire
-de la zone, ou les cellules que l'écran recoupe — et les tuiles vectorielles, du
-zoom courant au plus fin. Le poids est annoncé avant, et au-delà de quatre mille
-tuiles on refuse : ce n'est plus un secteur, c'est la région.
-
-Le mode « Tout chargé » couvrait déjà le cas d'une zone. Il n'existe pas en
-région — c'est précisément ce qu'on ne peut pas faire à cette taille — et c'est
-pourtant là que le besoin est le plus fort : hors de Paris le réseau mobile est
-moins bon, et une cellule pèse seize mégaoctets.
-
-**C'est le service worker qui télécharge, pas la page.** Deux raisons : lui seul
-connaît le nom de ses caches — que la page devrait dupliquer, donc
-désynchroniser à la première montée de version — et il survit au passage de
-l'onglet en arrière-plan, ce qui arrive à tous les coups quand on lance soixante
-mégaoctets et qu'on repose son téléphone. Un 404 n'est pas compté comme un
-échec : la pyramide a de vrais trous, et une tuile absente n'est pas une
-préparation ratée.
-
-L'application est installable (manifeste PWA) et s'ouvre en plein écran. Elle ne
-l'était pas vraiment : le manifeste ne déclarait aucune icône, et il en faut une
-de 192 et une de 512 pour que l'ajout à l'écran d'accueil soit seulement proposé.
-Un service worker sans installation possible ne sert presque à rien — c'est
-justement sur le téléphone, en marchant, que le hors-ligne compte.
-
-Les icônes sont **dessinées, pas déposées** :
-
-```bash
-npm run icons
-```
-
-[`pipeline/make-icons.mjs`](pipeline/make-icons.mjs) rend le motif en coordonnées
-normalisées puis suréchantillonne, ce qui donne des bords nets à toutes les
-tailles sans dépendre d'un éditeur. Le motif est le sujet de l'application : deux
-trottoirs d'une même rue, l'un à l'ombre, l'autre au soleil, et le soleil qui
-décide lequel. La variante « maskable » rentre le dessin dans le disque de 40 %
-de rayon qu'Android conserve ; iOS ignore le manifeste et lit
-`apple-touch-icon`.
-
-La géolocalisation **et** le service worker exigent un **contexte sécurisé** :
-`localhost` en développement, HTTPS pour un téléphone sur le réseau local.
 
 ---
 
@@ -1215,9 +1263,13 @@ La géolocalisation **et** le service worker exigent un **contexte sécurisé** 
   charge la zone d'un bloc — plus lent à l'ouverture, mais on peut ensuite
   dézoomer sans limite et tout reste disponible hors ligne. Les deux chemins
   donnent exactement la même image : c'est cette égalité qui sert de test.
-- **Ciel** : météo du jour ou ciel clair comme référence stable.
-- **Modes de lecture** : indice global, soleil direct, ouverture au ciel,
-  éblouissement, scintillement, indice UV.
+- **Ciel** : météo du jour ou ciel clair comme référence stable. La météo ne
+  s'applique qu'aux jours dont le soleil est celui des ombres calculées ; sinon
+  la carte reste en ciel clair, et le bandeau horaire dit pourquoi (voir « Et la
+  météo d'un autre jour ? »).
+- **Modes de lecture** : indice global, lumière à l'œil, soleil direct,
+  ouverture au ciel, éblouissement, scintillement, réverbération, éclairage
+  nocturne, indice UV.
 - **Clic sur une rue** : le détail des deux côtés, la courbe de la journée pour
   chacun, et la recommandation — « Marchez côté sud, 46 contre 66 côté nord ».
 - **L'URL suit la carte** : un lien vers une rue précise reste partageable, et
@@ -1235,13 +1287,12 @@ La géolocalisation **et** le service worker exigent un **contexte sécurisé** 
   réseau ne connaît que des *noms de voie*, or c'est bien avec un numéro qu'on
   saisit une destination. Nominatim reste en dernier recours, sur validation
   explicite, pour ce qui n'est pas une adresse : gares, musées, jardins.
-- **L'éblouissement affiché est celui du pire cas**, soleil de face. Il dépend du
-  cap de marche — marcher face à un soleil rasant n'a rien à voir avec parcourir
-  la même rue en sens inverse — et une carte ne sait pas dans quel sens on
-  prendra la rue. Le calcul d'itinéraire, lui, évalue chaque tronçon dans le sens
-  réellement parcouru. La même rue portait donc deux chiffres selon l'endroit où
-  on la lisait, sans que rien ne l'explique ; c'est désormais écrit sous le menu
-  de lecture, et la ligne du panneau s'appelle « Éblouissement de face ».
+- **La carte affiche le pire des deux sens de la rue.** La lumière à l'œil et
+  l'éblouissement dépendent du cap de marche — marcher face à un soleil rasant
+  n'a rien à voir avec parcourir la même rue en sens inverse — et une carte ne
+  sait pas dans quel sens on prendra la rue. Elle évalue donc les deux sens de
+  l'axe et retient le pire ; le calcul d'itinéraire, lui, évalue chaque tronçon
+  dans le sens réellement parcouru. C'est écrit sous le menu de lecture.
 
 L'interface est volontairement sombre et peu contrastée. Une interface blanche
 pour une application destinée à des personnes que la lumière fait souffrir
@@ -1257,7 +1308,7 @@ pas au même rythme.
 | Donnée | Résolution temporelle | Fraîcheur |
 |---|---|---|
 | Position du soleil | **Continue** — c'est une formule, calculée pour la minute affichée | Recalculée à chaque image |
-| Nébulosité, indice UV | **Horaire**, interpolée linéairement jusqu'à la minute | Prévision retéléchargée à chaque ouverture |
+| Nébulosité, indice UV | **Horaire**, interpolée linéairement jusqu'à la minute | Prévision retéléchargée à chaque ouverture, appliquée si son soleil est celui du calcul |
 | Transmission solaire, scintillement | Précalculés toutes les 30 min, interpolés entre les deux pas encadrants | Figés à la date du calcul |
 | Ouverture au ciel, couvert arboré, largeur de rue | Aucune — c'est de la géométrie | Figés au calcul |
 | Feuillage présent ou non | Saisonnière, tranchée à la date du calcul | Figé au calcul |
@@ -1276,7 +1327,9 @@ jours. Le 31 juillet 2026, par exemple :
 réellement le ciel, pas seulement l'angle du soleil.
 
 Une limite en revanche : **un seul jour est chargé à la fois**, celui du calcul.
-On ne peut pas faire défiler plusieurs journées.
+On ne peut pas faire défiler plusieurs journées. Le menu « Jour » ne change que
+la météo — et seulement tant que son soleil reste celui du calcul (voir plus
+bas).
 
 La date du calcul est affichée en haut à gauche, et **passe en orange dès
 qu'elle a plus d'une semaine**, avec le rappel de la commande à lancer.
@@ -1341,6 +1394,59 @@ Un recalcul quotidien n'apporte donc presque rien **pour le soleil** : 0,4° de
 dérive, c'est moins que l'incertitude sur la hauteur des bâtiments. Ce sont les
 chantiers qui l'imposent, pas l'astronomie.
 
+### Et la météo d'un autre jour ?
+
+La prévision porte sur aujourd'hui, demain et après-demain ; le soleil et les
+ombres, sur la date du calcul. La carte marie les deux **à la même heure** — ce
+qui n'est honnête que si, à cette heure-là, le soleil est au même endroit les
+deux jours.
+
+Rien ne le vérifiait. Une zone calculée le 31 juillet, ouverte le 9 octobre :
+
+| Heure | Soleil des ombres (31 juillet) | Soleil de la prévision (9 octobre) | Ce que la carte en faisait |
+|---|---|---|---|
+| 10:00 | 34° | 17° | le couvert d'octobre, 20 W/m² de diffus, sous un soleil d'été |
+| 19:30 | 18° | couché | 0 W/m² de direct, mesuré après le coucher : une carte presque entièrement à zéro, soleil encore haut |
+
+Un jour de prévision n'est donc retenu que si **la course du soleil reste à
+1,4° de celle du calcul, à chaque pas de temps de la journée**. 1,4° de hauteur,
+c'est moins de 5 % de longueur d'ombre au midi d'équinoxe : l'incertitude d'un
+mètre du modèle de surface sur un immeuble de vingt. On compare des hauteurs, et
+non des jours, parce que la dérive varie d'un facteur vingt avec la saison :
+
+| Date du calcul | Jours suivants où la prévision s'applique |
+|---|---|
+| Équinoxes, mi-avril, mi-février | 3 |
+| Mi-août | 4 |
+| Fin juillet, mi-novembre | 5 |
+| Mi-janvier, mi-mai | 6 |
+| Solstice d'hiver | 14 |
+| Solstice d'été | 18 |
+
+Et **aucun de part et d'autre d'un changement d'heure** : un seul jour d'écart,
+mais tout le soleil décalé d'une heure à l'horloge, soit plus de 8°. Un compte de
+jours l'aurait laissé passer.
+
+Rafraîchie chaque nuit, une zone n'atteint jamais la limite : sa prévision court
+de zéro à deux jours après le calcul, 0,8° au pire, à l'équinoxe. Une nuit
+manquée la porte à 1,2°, encore dedans.
+
+Au-delà, **la carte reste en ciel clair**, le menu « Ciel » grise la météo, et le
+bandeau horaire le dit — « ciel clair (référence) · météo écartée : ombres du
+31 juillet » —, l'infobulle donnant l'écart en degrés et la commande à lancer.
+La prévision n'est alors même pas demandée : la position de la zone ne part pas
+pour rien.
+
+**Pourquoi l'écarter plutôt que la transposer ?** On aurait pu transporter un
+rapport : le global prévu sur le global par ciel clair du jour prévu, appliqué au
+ciel clair du jour calculé. Mais aux heures où l'un des deux soleils est couché —
+19 h 30 ici, l'heure même qui a révélé la panne —, ce rapport n'existe pas : il
+faudrait inventer l'effet des nuages d'octobre sur un soleil que la prévision n'a
+pas vu. Et le reste de la journée ne serait la météo d'aucun des deux jours, sous
+un libellé « aujourd'hui » qui affirmerait le contraire. Le ciel clair n'est pas
+non plus la météo du jour — mais il ne prétend pas l'être, et c'est déjà la
+référence que la carte prend quand la prévision ne répond pas.
+
 ---
 
 ## Limites connues
@@ -1384,97 +1490,96 @@ chantiers qui l'imposent, pas l'astronomie.
 Les précédentes portent sur les **données**. Celles-ci portent sur la
 **physique**, et la première domine tout le reste.
 
-8. **Les poids de l'indice encodent un jugement, calibré sur rien.** 0,34 pour le
-   soleil direct, 0,18 pour l'ouverture au ciel, et ainsi de suite : aucun retour
-   d'utilisateur photosensible n'a servi à les fixer. Deux jeux de poids
-   plausibles peuvent inverser le classement de deux rues. Tout ce qui suit est
-   du second ordre à côté.
+8. **Le partage des poids reste un jugement.** Les trois composantes ont
+   désormais une forme publiée — l'éclairement à l'œil de la CIE S 026, le signal
+   de Zele, le logarithme de McAdams, le terme de sources de la DGP — mais leur
+   partage, 0,62 / 0,30 / 0,08, n'est qu'**ordonné** par la littérature, pas
+   mesuré. Aucun retour d'utilisateur photosensible n'a servi à le fixer. Trois
+   poids presque indépendants valent mieux que six corrélés, mais deux partages
+   plausibles peuvent encore inverser le classement de deux rues. Des
+   comparaisons par paires (« laquelle de ces deux rues ? ») suffiraient à les
+   caler.
 9. **Rien n'est validé photométriquement.** La campagne aérienne teste la
-   géométrie. La physique diffuse ajoutée depuis — ciel CIE, sol, rebonds,
-   pondération mélanopique — n'est vérifiée que par ses invariants : réduction
-   exacte au cas uniforme, conservation du niveau en site dégagé, signes des
-   effets. Des invariants ne disent pas la justesse.
-10. **La réverbération suppose toujours deux murs parallèles.** L'obliquité du
-    soleil est désormais traitée exactement, mais la formule reste approchée aux
-    carrefours, sur les places et aux décrochés de façade, où les deux murs ne
-    sont ni parallèles ni à la même distance. Aller plus loin demanderait de
-    stocker la **distance** à chaque secteur et non sa seule élévation — ce qui
-    ferait perdre l'élimination de la largeur, c'est-à-dire tout l'intérêt de la
-    méthode.
-11. **L'éblouissement n'est pas encore une métrique complète.** La dépendance à
-    la hauteur suit désormais l'indice de position de Guth, en 1/P² comme dans
-    l'UGR — mais il manque la luminance d'adaptation au dénominateur, et le
-    plancher à 0,3 pour le soleil dans le dos reste posé sans mesure.
-12. **Pas d'adaptation de l'œil, ni de mémoire — et c'est délibéré.** L'UGR
-    divise la gêne par la luminance d'adaptation : un fond clair rend une source
-    vive plus supportable. On s'en abstient ici, parce que cette division suppose
-    une adaptation normale, ce qui est précisément la fonction altérée chez les
-    personnes photophobes. Appliquer la formule standard rendrait le modèle moins
-    juste pour son public, pas plus.
+   géométrie. Chaque maillon radiatif est désormais éprouvé contre son
+   implémentation de référence — pvlib, `gendaylit`, `evalglare` —, ce qui dit
+   que le code fait ce que disent les publications. Cela ne dit pas que les
+   publications décrivent une rue de Paris. Pour ça, il faut sortir avec un
+   luxmètre, ou mieux une caméra de luminance.
+10. **La réverbération suppose toujours deux murs parallèles.** L'orientation
+    réelle de chaque façade se lit désormais dans le profil, et l'obliquité du
+    soleil est traitée exactement. Mais la part éclairée reste celle d'un canyon,
+    approchée aux carrefours, sur les places et aux décrochés de façade. Aller
+    plus loin demanderait de stocker la **distance** à chaque secteur, ce qui
+    ferait perdre l'élimination de la largeur.
+11. **La DGP vient du bureau.** Sa structure — un terme d'éclairement à l'œil,
+    un terme de sources rapporté à l'adaptation — est reprise ; ses constantes
+    absolues ne le sont pas. Elles ont été ajustées sur des observateurs en
+    intérieur, à des éclairements que la rue dépasse d'un ordre de grandeur :
+    appliquées telles quelles, toute rue au soleil serait « intolérable ». C'est
+    pourquoi les deux termes sont normalisés sur le plafond physique plutôt que
+    lus sur l'échelle de la DGP.
+12. **L'adaptation est au dénominateur, la mémoire manque toujours.** Le modèle
+    s'abstenait d'adaptation, au motif qu'elle serait précisément altérée chez
+    les personnes photophobes. McAdams et al. (2020) disent l'inverse pour la
+    rétine — la combinaison des signaux y est la même chez les migraineux, la
+    différence est une amplification en aval. On reprend donc la structure de
+    la DGP, et le seuil abaissé porte l'amplification.
 
-    Reste que la mémoire manque vraiment : sortir d'un couloir de métro en plein
+    La mémoire, elle, manque vraiment : sortir d'un couloir de métro en plein
     soleil n'est pas modélisé, alors qu'un itinéraire *est* une succession.
-    L'ajouter au **calcul d'itinéraire** n'est pas qu'un travail à faire, c'est
-    une incompatibilité : le coût d'une arête dépendrait du chemin parcouru pour
-    l'atteindre, ce qui retire à Dijkstra la propriété qui le rend correct. Il
-    faudrait déplier l'état d'adaptation dans l'espace de recherche, donc
-    multiplier un graphe de 445 000 arêtes.
-
-    Le faire **après coup**, sur un trajet déjà calculé, est en revanche
-    accessible — et c'est fait : les transitions brutales ombre → plein soleil
-    sont signalées dans la feuille de route et annoncées trente mètres avant
-    pendant le guidage (voir « Les passages brutaux »). Ça ne modélise toujours
-    pas l'adaptation ; ça dit où elle sera mise à l'épreuve.
+    L'ajouter au **calcul d'itinéraire** est une incompatibilité : le coût d'une
+    arête dépendrait du chemin parcouru pour l'atteindre, ce qui retire à
+    Dijkstra la propriété qui le rend correct. Le faire **après coup** est fait :
+    les transitions brutales ombre → plein soleil sont signalées dans la feuille
+    de route et annoncées trente mètres avant (voir « Les passages brutaux »).
 13. **Le scintillement n'a toujours pas de fréquence mesurée**, et n'en aura pas
     à cet échantillonnage : un point tous les 4 m plafonne la fréquence spatiale
     résoluble à 0,125 cycle/m, soit **0,17 Hz** — quand la bande déclenchante
-    commence à 3 Hz. Il faudrait échantillonner tous les **23 cm**.
-
-    Le modèle ne prétend donc plus la mesurer. Il mesure à la place la
-    **gappiness du houppier** (voir plus haut), qui dit *si* ça mouchette sans
-    dire à quelle cadence. C'est la bonne grandeur observable ; la cadence reste
-    hors de portée.
-14. **Le trouble de Linke n'est déduit que lorsque le faisceau est mesuré.**
-    Quand Open-Meteo fournit les flux, on le relit à l'envers de l'extinction
-    ESRA ; hors ligne, on retombe sur la valeur moyenne de 4.
-15. **Huit types de ciel CIE sur quinze.** La sélection suit désormais la clarté
-    de Perez, l'indice normalisé, et non plus une grandeur maison — mais la
-    luminosité Δ n'est pas encore employée, alors qu'elle distingue un couvert
-    clair d'un couvert d'orage à ε identique.
-16. **Le feuillage suit désormais Beer-Lambert partout**, y compris pour le
-    facteur de vue du ciel, qui employait une opacité fixe de 0,65 — saison et
-    essence confondues. Reste que le houppier est un dôme déduit du tronc, pas
-    l'enveloppe relevée (voir le point 4).
+    commence à 3 Hz. Le modèle mesure à la place la **gappiness du houppier**,
+    qui dit *si* ça mouchette sans dire à quelle cadence.
+14. **Le seuil de la dose vient d'une étude.** 437 lx est la moyenne de 39
+    patients (Perenboom et al., 2018), avec un écart-type d'un demi-log : la
+    moitié du public est gênée plus tôt, l'autre plus tard. Le seuil baisse
+    encore pendant les crises (Vanagaite et al., *Cephalalgia*, 1997).
+15. **Le spectre du ciel couvert est une hypothèse de neutralité.** SPCTRL2 ne
+    décrit que le ciel clair ; sous les nuages, on pose que les gouttelettes
+    diffusent toutes les couleurs de la même façon, et que la part nuageuse du
+    ciel a la couleur du global clair. C'est l'ordre de grandeur mesuré (un
+    couvert est proche de D65), pas un modèle de transfert radiatif nuageux.
+16. **Trois hypothèses déclarées, sans donnée pour les fixer** : un quart de
+    façade vitrée, partout ; un bord de champ visuel dispersé sur 5° d'une
+    personne à l'autre ; un regard horizontal, quand on marche en regardant un
+    peu le sol.
+17. **Les arbres ne masquent pas les façades.** Le feuillage retire sa part du
+    ciel et du soleil, mais le profil d'horizon de la réverbération ne relève que
+    le bâti : un alignement de platanes ne cache pas le mur éclairé d'en face.
+    Le corriger demanderait un second profil, celui du feuillage, dans le
+    binaire. Le houppier reste un dôme déduit du tronc en mode vectoriel (voir le
+    point 4).
 
 ### Limites géométriques peu visibles
 
-17. **Portée des rayons bornée** : 450 m pour le soleil — désormais calée sur la
-    marge de données téléchargée, plus rien n'est ignoré de ce qu'on a payé — et
-    150 m pour le balayage d'horizon. La Tour Montparnasse porte tout de même
-    près de 1 200 m d'ombre à 10° de hauteur : aller plus loin demanderait
-    d'élargir la collecte, pas seulement de lever la borne.
-18. **Sortir de l'emprise vaut ciel dégagé** — mais l'emprise des *données*
-    déborde de 450 m celle de la zone calculée, précisément pour ça. Le rayon
-    solaire portant au plus à 400 m, les tronçons de bordure sont donc
-    correctement ombrés. La limite ne mord que sur le balayage d'horizon aux
-    tout derniers mètres du coin de l'emprise.
-19. **Le profil d'horizon est moyenné par secteur de 11,25°** — trente-deux
-    secteurs depuis que le profil sert aussi à l'intégration du ciel. Un immeuble
-    haut isolé y est encore dilué, mais deux fois moins.
-20. **Pas de temps de 15 minutes**, interpolé linéairement. Un front d'ombre reste
-    plus rapide que ça ; descendre plus bas doublerait encore le fichier.
-21. **Hauteur des yeux figée à 1,60 m**, piéton debout. Ni fauteuil roulant, ni
+18. **Portée des rayons bornée** : 450 m pour le soleil — calée sur la marge de
+    données téléchargée — et 150 m pour le balayage d'horizon. La Tour
+    Montparnasse porte tout de même près de 1 200 m d'ombre à 10° de hauteur :
+    aller plus loin demanderait d'élargir la collecte, pas seulement de lever la
+    borne.
+19. **Sortir de l'emprise vaut ciel dégagé** — mais l'emprise des *données*
+    déborde de 450 m celle de la zone calculée, précisément pour ça. La limite ne
+    mord que sur le balayage d'horizon aux tout derniers mètres du coin de
+    l'emprise.
+20. **Le profil d'horizon est moyenné par secteur de 11,25°.** Un immeuble haut
+    isolé y est encore dilué ; et l'orientation des façades, lue sur trois
+    secteurs voisins, devient approximative là où un mur ne couvre qu'un
+    secteur.
+21. **Pas de temps de 15 minutes**, interpolé linéairement. Un front d'ombre reste
+    plus rapide que ça ; stocker les instants de passage plutôt qu'une série
+    donnerait des bords exacts, mais demanderait un nouveau format.
+22. **Hauteur des yeux figée à 1,60 m**, piéton debout. Ni fauteuil roulant, ni
     enfant.
-22. **Une seule convention de champ de vision reste arbitraire.** La chaussée vue
-    est comptée pour moitié sous les pieds et moitié devant : ce partage-là est
-    posé, pas dérivé.
-
-    En revanche, la moitié attribuée au sol n'en est pas une : pour un regard
-    horizontal, tout ce qui est sous la ligne d'horizon est du sol, et cela vaut
-    quelle que soit la largeur de la rue. La part des façades, elle, vient déjà
-    du profil d'horizon relevé. J'avais écrit ailleurs que la largeur de rue
-    stockée permettrait de dériver ces parts — c'est faux, elle ne les change
-    pas.
+23. **L'axe de la rue, sur la carte, est connu à 45° près** : il se lit dans le
+    côté du trottoir, stocké comme l'une des huit directions cardinales. Le
+    calcul d'itinéraire, lui, connaît le cap exact de chaque tronçon.
 
 ### La validation ne tenait que sur un site — elle en couvre huit
 
@@ -1737,7 +1842,7 @@ pipeline/
     build.js           orchestrateur
     dsm.js             assemblage du modèle numérique de surface
     shadow.js          lancer de rayons, vue du ciel, profil d'horizon, largeur
-    model.js           l'indice, la météo, l'UV — partagé avec le web
+    model.js           l'indice, la lumière à l'œil, la météo, l'UV — partagé avec le web
     pack.js            tuiles vectorielles, binaire de zone, graphe d'itinéraire
     validate-shadows.js  confrontation aux photos aériennes de l'IGN
     fetch/
@@ -1746,7 +1851,9 @@ pipeline/
       trees.js         arbres de la Ville de Paris
       network.js       réseau piéton OpenStreetMap
       ortho.js         photos aériennes et dates de vol
-    lib/               soleil, projection, rastérisation, cache HTTP
+    lib/               soleil et rayonnement, ciel de Perez, spectre (SPCTRL2,
+                       CIE S 026), projection, rastérisation, cache HTTP
+  derive-spectra.mjs   régénère les tables spectrales depuis leurs sources
   cache/               données téléchargées (non versionné)
 
 web/
@@ -1760,10 +1867,11 @@ web/
     link.js            ce qu'un lien porte : départ, arrivée, priorité
     offline.js         ce qu'il faut télécharger pour tenir hors ligne
     shadows.js         ombres portées en direct sur canevas
-    weather.js         prévision Open-Meteo (nébulosité, UV, flux mesurés)
+    weather.js         prévision Open-Meteo (nébulosité, UV, flux, point de rosée),
+                       et les jours où elle vaut pour les ombres calculées
     speech.js          annonces vocales et vibrations
     style.css
-  test/                itinéraire, guidage, cellules, liens, hors-ligne
+  test/                itinéraire, guidage, cellules, liens, hors-ligne, météo
   public/sw.js         service worker — hors ligne et préparation d'un secteur
   public/data/         sortie du pipeline (non versionné)
 ```
@@ -1776,9 +1884,11 @@ l'indice dans tout le projet.
 Zone `centre` (7,2 × 3,9 km, maille 1,5 m) : 283 248 points d'échantillonnage,
 48 182 tronçons, 35 pas de temps, ~20 min de calcul, 48 Mo de sortie.
 
-Dans le navigateur : recolorer les 48 000 tronçons prend une vingtaine de
+Dans le navigateur : recolorer les 48 000 tronçons prenait une vingtaine de
 millisecondes (`feature-state`, jamais la géométrie), et un itinéraire complet
-20 ms.
+20 ms. L'éclairement à l'œil coûte environ 1,6 fois l'ancien indice — 8 µs par
+trottoir et par cap, la carte en évaluant deux. Repeindre les mille tronçons
+visibles de la zone `test` prend 30 à 50 ms.
 
 Le rendu des ombres a demandé deux optimisations sans lesquelles la carte se
 figeait dès qu'on la déplaçait — **1,4 seconde par image** sur le Marais :

@@ -8,3 +8,6 @@ package-lock.json
 # Le README est mis en forme à la main : ses tableaux sont alignés pour être
 # lisibles en texte brut, et Prettier les réécrirait.
 README.md
+
+# Généré par pipeline/derive-spectra.mjs : le relancer doit redonner le même fichier.
+pipeline/src/lib/spectral-data.js

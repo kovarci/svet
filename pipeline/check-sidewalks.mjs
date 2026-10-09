@@ -69,7 +69,6 @@ function evalSide(view, ctx) {
     altitude: ctx.sun.altitude,
     flicker: (view.flicker[i] + (view.flicker[j] - view.flicker[i]) * t) / 100,
     albedo: meta.albedo,
-    luxReference: meta.luxReference,
     sky: ctx.sky,
   });
   return { index: discomfortIndex(c, meta.weights), sun: c.sun * 100, side: view.side };

@@ -464,6 +464,11 @@ input:focus-visible {
 
 #panel-stats .row:first-child {
   border-top: none;
+}
+
+/* Seul le tableau à deux côtés a une ligne d'en-tête ; sur un cheminement à un
+   seul relevé, la première ligne est une donnée comme les autres. */
+#panel-stats.two-sided .row:first-child {
   color: var(--text-dim);
   font-size: 10px;
   text-transform: uppercase;

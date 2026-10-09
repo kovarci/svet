@@ -480,7 +480,11 @@ async function main() {
     weights: config.weights,
     albedo: config.albedo,
     groundAlbedo: config.groundAlbedo,
-    luxReference: config.luxReference,
+    glazing: config.glazing,
+    // La luminance de voile est pondérée par le signal photophobe — cônes et
+    // mélanopsine. Un jeu sans cette mention l'a été par la mélanopsine seule,
+    // et l'affichage le corrige.
+    veilWeighting: 'photophobic',
     horizonBins: config.horizonBins,
     walkingSpeed: config.walkingSpeed,
     crossingPenalty: config.crossingPenalty,

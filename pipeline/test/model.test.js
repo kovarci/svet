@@ -22,29 +22,47 @@ import {
   sunPosition,
   applyRefraction,
   localToUTC,
+  sunPathDrift,
   airMass,
   clearSkyIlluminance,
+  clearSkyIrradiance,
+  erbsSplit,
   linkeFromBeam,
+  perezEfficacy,
   perezSkyIndices,
+  precipitableWater,
   PEREZ_BINS,
   DEG,
 } from '../src/lib/sun.js';
-import { skyDistribution, geometricSkyView, SKY_TYPES } from '../src/lib/sky.js';
+import { skyDistribution, geometricSkyView, perezParameters, SKY_TYPES } from '../src/lib/sky.js';
+import {
+  aod500FromLinke,
+  clearSkySpectra,
+  daylightMelanopic,
+  melanopicDER,
+  photophobicRatio,
+  planckMelanopicDER,
+} from '../src/lib/spectrum.js';
+import { D65, CIE_FIRST, CIE_STEP } from '../src/lib/spectral-data.js';
 import {
   components,
   discomfortIndex,
+  doseComponent,
   illuminance,
   reverberation,
   skyConditions,
-  beamColourTemperature,
-  skyColourTemperature,
-  melanopicIlluminance,
-  daylightMelanopicRatio,
+  wallNormals,
+  fresnel,
   positionIndex,
   glareFactor,
   melanopicRatio,
+  lampPhotophobicRatio,
   nightShare,
   veilingLuminance,
+  DEFAULT_WEIGHTS,
+  DISCOMFORT_THRESHOLD,
+  LEGACY_VEIL_SCALE,
+  VEIL_SATURATION,
   localUV,
   uvDirectFraction,
   flickerFactor,
@@ -102,6 +120,22 @@ test('hauteur du soleil aux solstices et à l’équinoxe', () => {
   }
 });
 
+test('la dérive de la course solaire retrouve le tableau du README', () => {
+  // « À quelle fréquence, vraiment ? » : 0,39°/jour aux équinoxes, 0,03 au
+  // solstice d'été. La dérive compare toute la journée, pas seulement midi —
+  // elle ne peut donc pas descendre sous l'écart de midi.
+  const steps = Array.from({ length: 69 }, (_, i) => 300 + 15 * i);
+  const drift = (a, b) => sunPathDrift(a, b, steps, PARIS.lat, PARIS.lon);
+  assert.equal(drift('2026-03-20', '2026-03-20'), 0);
+  const equinox = drift('2026-03-20', '2026-03-21');
+  const solstice = drift('2026-06-21', '2026-06-22');
+  assert.ok(equinox > 0.38 && equinox < 0.42, `équinoxe : ${equinox.toFixed(3)}°/jour`);
+  assert.ok(solstice < 0.05, `solstice : ${solstice.toFixed(3)}°/jour`);
+  // Le changement d'heure : un jour d'écart, mais une heure de soleil.
+  const shift = drift('2026-03-28', '2026-03-29');
+  assert.ok(shift > 8, `changement d'heure : ${shift.toFixed(1)}°`);
+});
+
 test('la réfraction relève le soleil, et d’autant plus qu’il est bas', () => {
   const liftAt = (deg) => (applyRefraction(deg / DEG) - deg / DEG) * DEG;
   const atHorizon = liftAt(0);
@@ -134,14 +168,7 @@ const baseline = {
 };
 
 test('l’indice reste borné entre 0 et 100, quoi qu’on lui donne', () => {
-  const weights = {
-    directSun: 0.34,
-    skyView: 0.18,
-    brightness: 0.16,
-    reverb: 0.14,
-    glare: 0.1,
-    flicker: 0.08,
-  };
+  const weights = DEFAULT_WEIGHTS;
   for (const transmission of [0, 0.5, 1]) {
     for (const svf of [0, 0.5, 1]) {
       for (const altitude of [-10, 0, 5, 30, 60]) {
@@ -159,14 +186,7 @@ test('l’indice reste borné entre 0 et 100, quoi qu’on lui donne', () => {
 });
 
 test('plus de soleil direct ne peut pas abaisser l’indice', () => {
-  const weights = {
-    directSun: 0.34,
-    skyView: 0.18,
-    brightness: 0.16,
-    reverb: 0.14,
-    glare: 0.1,
-    flicker: 0.08,
-  };
+  const weights = DEFAULT_WEIGHTS;
   let previous = -1;
   for (const transmission of [0, 0.25, 0.5, 0.75, 1]) {
     const index = discomfortIndex(components({ ...baseline, transmission }), weights);
@@ -302,14 +322,15 @@ test('le ciel anisotrope survit à un changement du nombre de secteurs', () => {
 
 test('la clarté de Perez classe les ciels dans le bon ordre', () => {
   // ε ≈ 1 sous la couche, > 6 par ciel bleu franc. C'est l'indice normalisé,
-  // et il doit croître avec la part de faisceau direct.
-  const overcast = perezSkyIndices(0, 20000, 40 / DEG);
-  const hazy = perezSkyIndices(20000, 15000, 40 / DEG);
-  // Ciel clair parisien courant : 85 klx de faisceau pour 12 klx de diffus.
-  // Il tombe en catégorie 7 de Perez, pas 8 — la catégorie 8 demande un diffus
+  // et il doit croître avec la part de faisceau direct. Calculé sur des flux
+  // énergétiques, comme Perez le définit.
+  const overcast = perezSkyIndices(0, 200, 40 / DEG);
+  const hazy = perezSkyIndices(200, 150, 40 / DEG);
+  // Ciel clair parisien courant : 760 W/m² de faisceau pour 110 de diffus. Il
+  // tombe en catégorie 7 de Perez, pas 8 — la catégorie 8 demande un diffus
   // bien plus faible, c'est-à-dire un air de montagne.
-  const clear = perezSkyIndices(85000, 12000, 40 / DEG);
-  const veryClear = perezSkyIndices(95000, 7000, 40 / DEG);
+  const clear = perezSkyIndices(760, 110, 40 / DEG);
+  const veryClear = perezSkyIndices(900, 70, 40 / DEG);
   assert.ok(overcast.epsilon < 1.1, `couvert : ε = ${overcast.epsilon.toFixed(2)}`);
   assert.ok(hazy.epsilon > overcast.epsilon, 'un ciel voilé est plus clair qu’un couvert');
   assert.ok(clear.epsilon > PEREZ_BINS[5], `ciel clair : ε = ${clear.epsilon.toFixed(2)}`);
@@ -322,11 +343,11 @@ test('la clarté de Perez classe les ciels dans le bon ordre', () => {
 
 test('le trouble de Linke se relit dans le faisceau mesuré', () => {
   // Aller-retour : on synthétise un faisceau pour un trouble donné, puis on le
-  // redéduit. C'est l'inverse exact de l'extinction ESRA.
+  // redéduit. C'est l'inverse exact du faisceau d'Ineichen-Perez.
   for (const turbidity of [2.5, 4, 6]) {
     for (const altitudeDeg of [15, 40, 65]) {
-      const { directNormal } = clearSkyIlluminance(altitudeDeg / DEG, turbidity);
-      const found = linkeFromBeam(directNormal, altitudeDeg / DEG);
+      const { dni } = clearSkyIrradiance(altitudeDeg / DEG, turbidity);
+      const found = linkeFromBeam(dni, altitudeDeg / DEG);
       assert.ok(
         Math.abs(found - turbidity) < 0.01,
         `T_L ${turbidity} à ${altitudeDeg}° relu ${found.toFixed(2)}`,
@@ -334,7 +355,7 @@ test('le trouble de Linke se relit dans le faisceau mesuré', () => {
     }
   }
   // Un disque masqué par un nuage n'est pas une atmosphère : on ne le traduit pas.
-  assert.ok(linkeFromBeam(200, 40 / DEG) <= 8);
+  assert.ok(linkeFromBeam(20, 40 / DEG) <= 8);
   assert.ok(linkeFromBeam(0, 40 / DEG) > 0);
 });
 
@@ -461,39 +482,74 @@ test('le sol éclairé pèse sur la réverbération', () => {
   );
 });
 
-test('la lumière du jour est pondérée par la sensibilité mélanopique', () => {
-  // À éclairement égal, un ciel bleu franc est bien plus actif sur la
-  // mélanopsine qu'un soleil rasant rougi. Le modèle le faisait déjà pour les
-  // lampadaires ; il traitait les deux à égalité en plein jour.
-  const bleu = daylightMelanopicRatio(skyColourTemperature(1));
-  const couvert = daylightMelanopicRatio(skyColourTemperature(0));
-  assert.ok(bleu > couvert, `ciel clair ${bleu} devrait dépasser le couvert ${couvert}`);
+test('le rapport mélanopique se calcule sur les fonctions de la CIE', () => {
+  // D65 vaut exactement 1 : c'est la définition du rapport (CIE S 026). Le
+  // tester sur la table elle-même vérifie à la fois la normalisation et les
+  // tables générées.
+  const d65 = melanopicDER((wavelength) => D65[(wavelength - CIE_FIRST) / CIE_STEP] ?? 0);
+  assert.ok(Math.abs(d65 - 1) < 1e-12, `D65 : ${d65}`);
 
-  const rasant = daylightMelanopicRatio(beamColourTemperature(1));
-  const haut = daylightMelanopicRatio(beamColourTemperature(60));
-  assert.ok(haut > rasant * 1.3, `soleil haut ${haut} contre rasant ${rasant}`);
-
-  // D65 vaut exactement 1 par définition du rapport mélanopique.
-  assert.equal(daylightMelanopicRatio(6500), 1);
-  // Et la lumière du jour est plus bleue qu'un corps noir de même température :
-  // c'est tout l'intérêt d'une table distincte de celle des lampadaires.
-  assert.ok(
-    daylightMelanopicRatio(5000) > melanopicRatio(5000) * 0.9,
-    'les deux tables doivent rester du même ordre',
-  );
+  // L'illuminant A est un corps noir à 2 856 K.
+  const a = planckMelanopicDER(2856);
+  assert.ok(a > 0.48 && a < 0.51, `illuminant A : ${a.toFixed(4)}`);
 
   let previous = 0;
-  for (const deg of [0, 5, 10, 20, 30, 50, 90]) {
-    const cct = beamColourTemperature(deg);
-    assert.ok(cct >= previous, 'le faisceau doit se refroidir en montant');
-    previous = cct;
+  for (const cct of [1800, 2700, 4000, 6500, 10000]) {
+    const der = planckMelanopicDER(cct);
+    assert.ok(der > previous, `${cct} K : ${der}`);
+    previous = der;
   }
+});
 
-  // La pondération ne doit jamais rendre l'éclairement négatif ni infini.
-  for (const share of [0, 0.5, 1]) {
-    const m = melanopicIlluminance(50000, 12000, 30, share);
-    assert.ok(Number.isFinite(m) && m > 0, `éclairement mélanopique invalide : ${m}`);
+test('SPCTRL2 reproduit pvlib, longueur d’onde par longueur d’onde', () => {
+  // Valeurs de `pvlib.spectrum.spectrl2` (pvlib 0.16), zénith 30°, masse d'air
+  // 1,154, AOD 0,2 à 500 nm, eau 2 cm, ozone 0,33, pression 100 900 Pa, albédo
+  // 0,15, 1er janvier — d'où la correction de distance de 1,03505, que le
+  // portage n'applique pas : elle s'annule dans tout rapport.
+  const distance = 1.03505;
+  const reference = {
+    450: [1.2356867578147965, 0.46957767138057704],
+    500: [1.3126722561320918, 0.3811592579193175],
+    593: [1.3032275430666027, 0.2607871254454494],
+    690: [1.1068493310725818, 0.16588589890911573],
+  };
+  const s = clearSkySpectra({ zenithDeg: 30, airMass: 1.154, aod500: 0.2, water: 2 });
+  for (const [wavelength, [dni, dhi]] of Object.entries(reference)) {
+    const i = s.wavelength.indexOf(Number(wavelength));
+    assert.ok(i >= 0, `${wavelength} nm absent de la grille`);
+    assert.ok(Math.abs((s.beam[i] * distance) / dni - 1) < 1e-4, `direct à ${wavelength} nm`);
+    assert.ok(Math.abs((s.diffuse[i] * distance) / dhi - 1) < 1e-4, `diffus à ${wavelength} nm`);
   }
+});
+
+test('le soleil rougit en descendant, le ciel reste plus bleu que lui', () => {
+  const high = daylightMelanopic(60, 4);
+  const low = daylightMelanopic(8, 4);
+  assert.ok(high.beam > low.beam * 1.25, `haut ${high.beam} contre bas ${low.beam}`);
+  assert.ok(high.diffuse > high.beam, 'le ciel clair est plus bleu que le soleil');
+  // Une atmosphère chargée rougit davantage le faisceau.
+  assert.ok(daylightMelanopic(20, 2.5).beam > daylightMelanopic(20, 6).beam);
+
+  // Sous la couche, la lumière diffusée par les gouttelettes n'a pas la couleur
+  // du ciel bleu : le rapport du ciel doit retomber vers celui du global.
+  const clear = skyConditions(40 / DEG, 0);
+  const overcast = skyConditions(40 / DEG, 1);
+  assert.ok(overcast.melanopic.sky < clear.melanopic.sky, 'un couvert est moins bleu');
+  for (const sky of [clear, overcast]) {
+    for (const value of Object.values(sky.melanopic)) {
+      assert.ok(Number.isFinite(value) && value > 0, `rapport invalide : ${value}`);
+    }
+  }
+});
+
+test('la photophobie compte les cônes et la mélanopsine', () => {
+  // Zele et al. (2021) : (1 + 1,5·DER) / 2,5 — égal à 1 pour D65, comme le DER.
+  assert.ok(Math.abs(photophobicRatio(1) - 1) < 1e-12);
+  // L'écart entre lampe chaude et lampe froide est plus faible qu'avec la
+  // mélanopsine seule : les cônes voient aussi la lampe chaude.
+  const melanopicOnly = planckMelanopicDER(5000) / planckMelanopicDER(2000);
+  const photophobic = lampPhotophobicRatio(5000) / lampPhotophobicRatio(2000);
+  assert.ok(photophobic > 1 && photophobic < melanopicOnly, `${photophobic} / ${melanopicOnly}`);
 });
 
 test('l’indice de position fait chuter l’éblouissement dès que le soleil monte', () => {
@@ -513,6 +569,13 @@ test('l’indice de position fait chuter l’éblouissement dès que le soleil m
   assert.ok(relative(30) < 0.15, `à 30° : ${relative(30).toFixed(3)}`);
   assert.ok(relative(60) < 0.01, `à 60° : ${relative(60).toFixed(4)}`);
   assert.ok(relative(5) > 0.6, `à 5°, la gêne doit rester forte : ${relative(5).toFixed(2)}`);
+
+  // Sous la ligne de regard, l'indice d'Iwata : une source basse gêne davantage
+  // qu'une source à la même distance angulaire au-dessus.
+  assert.ok(positionIndex(-20) < positionIndex(20), 'la moitié basse du champ est plus sensible');
+  // De côté, l'indice de Guth croît avec l'écart.
+  assert.ok(positionIndex(10, 40) > positionIndex(10, 10));
+  assert.ok(positionIndex(40, 80) > positionIndex(40, 0), 'l’écart latéral s’ajoute à la hauteur');
 
   // Et le terme complet reste borné, quelle que soit la position du soleil.
   for (const deg of [1, 10, 40, 70]) {
@@ -587,8 +650,11 @@ test('le rapport mélanopique croît avec la température de couleur', () => {
     assert.ok(ratio > previous, `${cct} K : ${ratio} n'est pas supérieur à ${previous}`);
     previous = ratio;
   }
-  // Une LED froide fait au moins trois fois plus de bleu qu'un sodium.
-  assert.ok(melanopicRatio(5000) / melanopicRatio(2000) > 3);
+  // Une LED froide fait près de trois fois plus de bleu qu'un sodium : 2,88
+  // calculé sur les fonctions de la CIE, et non « plus de trois » comme le
+  // disait la table recopiée qu'on employait.
+  const ratio = melanopicRatio(5000) / melanopicRatio(2000);
+  assert.ok(ratio > 2.7 && ratio < 3.05, `rapport ${ratio.toFixed(2)}`);
 });
 
 test('la bascule jour/nuit est continue et bornée', () => {
@@ -633,41 +699,48 @@ test('l’éblouissement d’un lampadaire culmine à distance intermédiaire', 
 test('à flux et distance égaux, une lampe froide éblouit davantage', () => {
   const chaud = veilingLuminance({ flux: 4000, height: 6, cct: 2000 }, 15);
   const froid = veilingLuminance({ flux: 4000, height: 6, cct: 5000 }, 15);
-  assert.ok(froid > chaud * 2, `froid ${froid.toFixed(3)} vs chaud ${chaud.toFixed(3)}`);
+  // Moins de deux fois : les cônes voient aussi la lampe chaude (Zele et al.).
+  assert.ok(froid > chaud * 1.4, `froid ${froid.toFixed(3)} vs chaud ${chaud.toFixed(3)}`);
+
+  // La saturation suit le changement de pondération : la lampe médiane de Paris
+  // (2 800 K) doit garder exactement sa place dans l'échelle calibrée.
+  assert.ok(Math.abs(VEIL_SATURATION / LEGACY_VEIL_SCALE - 2.5) < 1e-9);
+  assert.ok(LEGACY_VEIL_SCALE > 1.3 && LEGACY_VEIL_SCALE < 1.6, `${LEGACY_VEIL_SCALE}`);
 });
 
-test('un soleil dans l’axe de la rue n’ombre pas le mur d’en face', () => {
-  // La formule de canyon supposait le soleil perpendiculaire à la rue. De biais,
-  // son rayon traverse la chaussée sur une distance plus longue et descend
-  // d'autant plus : l'ombre monte moins haut sur le mur d'en face. À la limite,
-  // soleil dans l'axe de la rue, il ne traverse jamais — le mur est entièrement
-  // éclairé, et le modèle l'ombrait à tort.
-
-  // Rue nord-sud : murs hauts à l'est et à l'ouest, dégagée aux deux bouts.
-  const bins = 16;
-  const rue = new Uint8Array(bins);
+test('les façades d’une rue regardent la chaussée, pas le piéton', () => {
+  // Rue nord-sud, deux murs plans à l'est et à l'ouest : tan β = (H/W)·|sin φ|.
+  // Chaque secteur était traité comme un mur tourné vers le piéton ; les murs vus
+  // en enfilade regardent en réalité la chaussée.
+  const bins = 32;
+  const rue = new Float64Array(bins);
   for (let i = 0; i < bins; i++) {
-    const azimuth = (i * 360) / bins;
-    const versLesBouts = Math.abs(Math.cos((azimuth * Math.PI) / 180));
-    rue[i] = Math.round(55 * (1 - versLesBouts));
+    const phi = (2 * Math.PI * i) / bins;
+    rue[i] = Math.atan(1.5 * Math.abs(Math.sin(phi))) * DEG;
+  }
+  const normals = wallNormals(rue);
+  for (let i = 0; i < bins; i++) {
+    if (rue[i] < 5) continue;
+    const azimuth = (((normals[i] * DEG) % 360) + 360) % 360;
+    const expected = i < bins / 2 ? 270 : 90;
+    assert.ok(
+      Math.abs(azimuth - expected) < 2,
+      `secteur ${i} : normale à ${azimuth.toFixed(1)}°, attendu ${expected}°`,
+    );
   }
 
+  // Conséquence : un soleil dans l'axe de la rue rase les deux façades. Elles ne
+  // reçoivent presque rien de lui, quand un soleil de travers en éclaire une.
   const altitude = 20 / DEG;
-  const sky = skyConditions(altitude, 0);
-  // Soleil au sud (dans l'axe de la rue) contre soleil à l'ouest (perpendiculaire).
+  const sky = skyConditions(altitude, 0, null, Math.PI, bins);
   const axe = reverberation(rue, altitude, Math.PI, sky, 0.45);
   const travers = reverberation(rue, altitude, (270 / 180) * Math.PI, sky, 0.45);
-
   assert.ok(
-    axe.sunlitWalls > travers.sunlitWalls,
-    `dans l’axe ${axe.sunlitWalls.toFixed(3)} devrait dépasser en travers ${travers.sunlitWalls.toFixed(3)}`,
+    travers.luminance > axe.luminance * 1.5,
+    `de travers ${Math.round(travers.luminance)} contre dans l’axe ${Math.round(axe.luminance)} cd/m²`,
   );
   for (const r of [axe, travers]) {
-    assert.ok(
-      r.sunlitWalls >= 0 && r.sunlitWalls <= 1,
-      `part éclairée hors bornes : ${r.sunlitWalls}`,
-    );
-    assert.ok(Number.isFinite(r.luminance) && r.luminance >= 0);
+    assert.ok(r.sunlitWalls >= 0 && r.sunlitWalls <= 1, `hors bornes : ${r.sunlitWalls}`);
   }
 });
 
@@ -756,12 +829,39 @@ test('une chaussée mouillée éblouit sous un soleil bas, pas sous un soleil ha
     });
   // À huit degrés la gêne sèche est déjà proche du maximum : on mesure l'écart
   // là où il reste de la marge, c'est-à-dire plus bas encore.
+  //
+  // La composante est logarithmique, comme le terme de sources de la DGP : une
+  // seconde source presque aussi vive ajoute quelques centièmes, pas des
+  // dizaines de pour cent.
   assert.ok(
-    glare(3, 1) > glare(3, 0) * 1.3,
+    glare(3, 1) > glare(3, 0) + 0.02,
     `mouillé ${glare(3, 1).toFixed(3)} contre sec ${glare(3, 0).toFixed(3)}`,
   );
-  assert.ok(glare(8, 1) >= glare(8, 0), 'le miroir ne peut pas soulager');
-  assert.ok(glare(60, 1) < glare(60, 0) * 1.05, 'soleil haut : le miroir ne compte presque plus');
+  // Le miroir ne peut pas soulager — mais c'est l'indice qui le dit, pas la seule
+  // composante de sources : le reflet éclaire aussi l'œil, et l'adaptation, au
+  // dénominateur de la DGP, en baisse le contraste. Dans la DGP complète, son
+  // terme d'éclairement compense ; ici, c'est la dose.
+  const index = (deg, wet) =>
+    discomfortIndex(
+      components({
+        transmission: 1,
+        svf: 1,
+        altitude: deg / DEG,
+        azimuth: Math.PI,
+        heading: Math.PI,
+        horizon: new Uint8Array(32),
+        wet,
+        sky: skyConditions(deg / DEG, 0, null, Math.PI, 32),
+      }),
+      DEFAULT_WEIGHTS,
+    );
+  for (const deg of [3, 8, 20, 50]) {
+    assert.ok(
+      index(deg, 1) >= index(deg, 0),
+      `à ${deg}° : ${index(deg, 1)} contre ${index(deg, 0)}`,
+    );
+  }
+  assert.ok(glare(50, 1) - glare(50, 0) < 0.005, 'soleil haut : le miroir ne compte presque plus');
 });
 
 test('le mouillage suit la pluie récente et reste borné', () => {
@@ -912,4 +1012,251 @@ test('l’UV devient presque entièrement diffus quand le soleil descend', () =>
     shaded(10, 0.6) > shaded(60, 0.9),
     `ombre à 10° ${shaded(10, 0.6).toFixed(3)} contre midi ${shaded(60, 0.9).toFixed(3)}`,
   );
+});
+
+// ───────────────────────────────────────── contre les implémentations de référence ─────
+
+test('le ciel clair d’Ineichen-Perez reproduit pvlib', () => {
+  // `pvlib.clearsky.ineichen` (pvlib 0.16), altitude 35 m, extraterrestre
+  // 1 361 W/m², masse d'air de Kasten-Young à 100 900 Pa.
+  const reference = [
+    [30, 3, 895.353186931384, 916.0224708811724, 102.05445671089751],
+    [60, 4, 433.51810848686364, 658.9763811660005, 104.02991790386335],
+    [80, 5, 69.18653202795541, 152.07140710648133, 42.77960930866904],
+  ];
+  for (const [zenith, turbidity, ghi, dni, dhi] of reference) {
+    const found = clearSkyIrradiance((90 - zenith) / DEG, turbidity);
+    for (const [name, value, expected] of [
+      ['global', found.ghi, ghi],
+      ['direct', found.dni, dni],
+      ['diffus', found.dhi, dhi],
+    ]) {
+      assert.ok(
+        Math.abs(value - expected) < 0.1,
+        `${name} à ${zenith}° : ${value.toFixed(2)} contre ${expected.toFixed(2)} W/m²`,
+      );
+    }
+  }
+});
+
+test('le partage d’Erbs reproduit pvlib', () => {
+  // `pvlib.irradiance.erbs`, 21 juin ; on reprend l'extraterrestre que pvlib
+  // en déduit, par l'indice de clarté qu'il rend.
+  const reference = [
+    [200, 60, 0.3026580353500961, 21.303901419245275, 189.34804929037736],
+    [500, 40, 0.4938650069012525, 214.18534279260714, 335.92450835618985],
+    [800, 30, 0.6989587927271252, 696.885128765351, 196.47977496961636],
+  ];
+  for (const [ghi, zenith, kt, dni, dhi] of reference) {
+    const extraterrestrial = ghi / (kt * Math.cos(zenith / DEG));
+    const found = erbsSplit(ghi, (90 - zenith) / DEG, extraterrestrial);
+    assert.ok(Math.abs(found.dni - dni) < 1e-6, `direct : ${found.dni} contre ${dni}`);
+    assert.ok(Math.abs(found.dhi - dhi) < 1e-6, `diffus : ${found.dhi} contre ${dhi}`);
+  }
+});
+
+test('l’épaisseur optique des aérosols inverse la formule de Kasten de pvlib', () => {
+  // `pvlib.atmosphere.kasten96_lt(2, 2, 0.151)` = 4,000181 : l'épaisseur large
+  // bande équivaut à celle de 700 nm, ramenée ici à 500 nm par Ångström.
+  const aod500 = aod500FromLinke(4.000181489635009, 2);
+  assert.ok(Math.abs(aod500 / Math.pow(700 / 500, 1.14) - 0.151) < 1e-6, `${aod500}`);
+});
+
+test('les efficacités lumineuses suivent les coefficients de Perez', () => {
+  // Catégorie 7 (4,5 ≤ ε < 6,2), Δ = 0,15, Z = 40°, W = 2 cm, à la main :
+  //   faisceau = 105,75 + 0,77·2 − 1,26·exp(5,73·Z − 5) − 34,44·0,15
+  //   diffus   = 141,88 + 1,90·2 − 53,24·cos Z − 14,03·ln 0,15
+  const Z = 40 / DEG;
+  const expectedBeam = 105.75 + 0.77 * 2 - 1.26 * Math.exp(5.73 * Z - 5) - 34.44 * 0.15;
+  const expectedDiffuse = 141.88 + 1.9 * 2 - 53.24 * Math.cos(Z) - 14.03 * Math.log(0.15);
+  const found = perezEfficacy(5, 0.15, Math.PI / 2 - Z, 2);
+  assert.ok(Math.abs(found.beam - expectedBeam) < 1e-9, `faisceau ${found.beam}`);
+  assert.ok(Math.abs(found.diffuse - expectedDiffuse) < 1e-9, `diffus ${found.diffuse}`);
+
+  // L'efficacité du faisceau chute au soleil rasant : le spectre rougit.
+  const low = perezEfficacy(5, 0.15, 5 / DEG, 2).beam;
+  assert.ok(low < found.beam * 0.8, `rasant ${low} contre ${found.beam}`);
+
+  // Perez et al. (1990) : W = exp(0,07·T_d − 0,075).
+  assert.ok(Math.abs(precipitableWater(10) - Math.exp(0.625)) < 1e-12);
+  assert.equal(precipitableWater(undefined), 2);
+});
+
+test('le ciel de Perez garde le niveau et la gradation', () => {
+  const open = new Uint8Array(32);
+  for (const [epsilon, brightness] of [
+    [1, 0.3],
+    [1.5, 0.25],
+    [3, 0.2],
+    [6, 0.12],
+    [11, 0.08],
+  ]) {
+    for (const altitude of [5, 30, 70]) {
+      const d = skyDistribution({
+        altitude: altitude / DEG,
+        azimuth: Math.PI,
+        epsilon,
+        brightness,
+        bins: 32,
+      });
+      assert.ok(
+        Math.abs(d.factor(open) - 1) < 1e-9,
+        `ε ${epsilon}, ${altitude}° : ${d.factor(open)}`,
+      );
+    }
+  }
+  // Sous un couvert, zénith plus lumineux que l'horizon : une ruelle reçoit plus
+  // que sa part géométrique.
+  const couvert = skyDistribution({
+    altitude: 30 / DEG,
+    azimuth: Math.PI,
+    epsilon: 1,
+    brightness: 0.3,
+    bins: 32,
+  });
+  const ruelle = new Uint8Array(32).fill(55);
+  assert.ok(couvert.factor(ruelle) > geometricSkyView(ruelle));
+  // Les coefficients de la première catégorie suivent leurs formes propres.
+  const p = perezParameters(1, 0.3, 0.5);
+  assert.ok(p.a > 0 && p.b < 0, `gradation : a ${p.a}, b ${p.b}`);
+});
+
+// ─────────────────────────────────────────────────────────── à l’œil ─────
+
+test('le feuillage retire de nouveau sa part du ciel', () => {
+  // La régression : en passant au ciel anisotrope, le facteur de vue du ciel —
+  // seul porteur du feuillage — n'était plus lu dès qu'un profil existait. Sous
+  // des platanes épais, le ciel comptait comme dégagé.
+  const bins = 32;
+  const horizon = new Uint8Array(bins).fill(25);
+  const sky = skyConditions(40 / DEG, 0.5, null, Math.PI, bins);
+  const at = (svf) =>
+    components({ transmission: 0, svf, altitude: 40 / DEG, azimuth: Math.PI, horizon, sky });
+  const open = at(geometricSkyView(horizon));
+  const trees = at(0.1);
+  assert.ok(trees.lux < open.lux * 0.5, `sous les arbres ${trees.lux} contre ${open.lux} lx`);
+  assert.ok(trees.eyeLux < open.eyeLux, 'à l’œil aussi');
+});
+
+test('à l’œil, le soleil compte selon qu’on lui fait face', () => {
+  const bins = 32;
+  const horizon = new Uint8Array(bins);
+  const altitude = 15 / DEG;
+  const sky = skyConditions(altitude, 0, null, Math.PI, bins);
+  const at = (heading) =>
+    components({ transmission: 1, svf: 1, altitude, azimuth: Math.PI, horizon, heading, sky });
+  const face = at(Math.PI);
+  const dos = at(0);
+  assert.ok(face.eyeLux > dos.eyeLux * 3, `face ${face.eyeLux} contre dos ${dos.eyeLux}`);
+  assert.ok(face.glare > 0.5 && dos.glare === 0, `éblouissement ${face.glare} / ${dos.glare}`);
+  // Sans cap, la carte prend le pire : face au soleil.
+  const carte = at(undefined);
+  assert.equal(carte.eyeLux, face.eyeLux);
+  // Deux caps : le pire des deux.
+  assert.equal(at([0, Math.PI]).eyeLux, face.eyeLux);
+
+  // Sous ciel uniforme, sans soleil ni obstacle, le plan de l'œil reçoit la
+  // moitié du ciel et le sol.
+  const uniform = skyConditions(40 / DEG, 1, null, Math.PI, bins);
+  const c = components({
+    transmission: 0,
+    svf: 1,
+    altitude: 40 / DEG,
+    horizon,
+    heading: 0,
+    sky: uniform,
+  });
+  assert.ok(
+    c.eyeLux > 0.45 * uniform.diffuseHorizontal,
+    `${c.eyeLux} pour ${uniform.diffuseHorizontal}`,
+  );
+  assert.ok(c.eyeLux < 0.75 * uniform.diffuseHorizontal, 'le sol sombre n’ajoute qu’une part');
+});
+
+test('un soleil hors du champ visuel n’éblouit pas', () => {
+  // Champ binoculaire : 60° vers le haut, 100° sur le côté, bord elliptique
+  // entre les deux. Un soleil à 70° est au-dessus des sourcils ; à 60° de haut
+  // et 90° de côté, au-dessus de la tempe.
+  const bins = 32;
+  const horizon = new Uint8Array(bins);
+  for (const [altitudeDeg, heading] of [
+    [70, Math.PI],
+    [60, Math.PI / 2],
+  ]) {
+    const sky = skyConditions(altitudeDeg / DEG, 0, null, Math.PI, bins);
+    const c = components({
+      transmission: 1,
+      svf: 1,
+      altitude: altitudeDeg / DEG,
+      azimuth: Math.PI,
+      horizon,
+      heading,
+      sky,
+    });
+    // Le bord est distribué d'une personne à l'autre : il reste une trace, pas
+    // davantage.
+    assert.ok(c.glare < 0.05, `soleil à ${altitudeDeg}°, cap ${heading} : ${c.glare}`);
+  }
+});
+
+test('le soleil dans le dos se voit dans les vitres d’en face', () => {
+  // Rue est-ouest, soleil bas au sud dans le dos : la façade nord, en plein
+  // soleil, renvoie son image. Sans vitrage, rien ; avec, une source.
+  const bins = 32;
+  const horizon = new Uint8Array(bins);
+  for (let i = 0; i < bins; i++) {
+    const phi = (2 * Math.PI * i) / bins;
+    horizon[i] = Math.round(Math.atan(0.9 * Math.abs(Math.cos(phi))) * DEG);
+  }
+  const altitude = 25 / DEG;
+  const sky = skyConditions(altitude, 0, null, Math.PI, bins);
+  const at = (glazing) =>
+    components({
+      transmission: 0,
+      svf: 0.5,
+      altitude,
+      azimuth: Math.PI,
+      horizon,
+      heading: 0,
+      glazing,
+      sky,
+    });
+  assert.equal(at(0).glare, 0, 'sans vitre, le soleil dans le dos n’éblouit pas');
+  assert.ok(at(0.25).glare > 0.1, `avec un quart de vitrage : ${at(0.25).glare}`);
+  assert.ok(at(0.6).glare > at(0.25).glare, 'plus de vitrage, plus de reflet');
+
+  // Fresnel exact : 2 % pour l'eau en incidence normale, tout en rasant.
+  assert.ok(Math.abs(fresnel(1, 1.333) - 0.0204) < 0.001);
+  assert.ok(fresnel(0.01, 1.333) > 0.9);
+});
+
+test('la dose part du seuil d’inconfort et croît en logarithme', () => {
+  // Perenboom et al. (2018) : 2,64 log lux chez le migraineux entre les crises.
+  assert.ok(Math.abs(Math.log10(DISCOMFORT_THRESHOLD) - 2.64) < 1e-12);
+  assert.equal(doseComponent(DISCOMFORT_THRESHOLD), 0);
+  assert.equal(doseComponent(100), 0);
+  // Weber-Fechner : chaque facteur dix ajoute la même quantité.
+  const a = doseComponent(1000);
+  const b = doseComponent(10000);
+  const c = doseComponent(100000);
+  assert.ok(a > 0 && b > a && c >= b);
+  assert.ok(Math.abs(b - a - (Math.min(c, 1) - b)) < 0.02 || c === 1);
+  assert.ok(doseComponent(1e7) === 1, 'borné à 1');
+});
+
+test('un jeu de poids d’avant ne pèse pas à moitié', () => {
+  // Une zone calculée avant ce modèle porte six poids qui ne désignent plus
+  // rien : on retombe sur les poids par défaut plutôt que d'en appliquer trois.
+  const c = { dose: 0.5, glare: 0.5, flicker: 0, nightShare: 0 };
+  const old = {
+    directSun: 0.34,
+    skyView: 0.18,
+    brightness: 0.16,
+    reverb: 0.14,
+    glare: 0.1,
+    flicker: 0.08,
+  };
+  assert.equal(discomfortIndex(c, old), discomfortIndex(c, DEFAULT_WEIGHTS));
+  const total = Object.values(DEFAULT_WEIGHTS).reduce((sum, w) => sum + w, 0);
+  assert.ok(Math.abs(total - 1) < 1e-9, `les poids somment à ${total}`);
 });

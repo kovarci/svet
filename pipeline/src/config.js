@@ -5,6 +5,8 @@
  * numérique de surface (MNS). Tout le reste du pipeline en découle.
  */
 
+import { DEFAULT_GLAZING_RATIO, DEFAULT_WEIGHTS } from './model.js';
+
 export const ZONES = {
   // Zone de démo : Marais / Île de la Cité / quais de Seine / Bastille.
   // Contraste maximal entre ruelles médiévales (très ombragées) et quais ouverts.
@@ -179,11 +181,14 @@ export const CONFIG = {
   svfRadius: 150,
 
   /**
-   * Réflectance des façades. Paris est une ville de calcaire lutétien, dont
-   * l'albédo tourne autour de 0,45 — bien plus clair que les 0,25 qu'on
-   * retenait jusqu'ici pour un mélange vague de murs et de chaussée.
+   * Réflectance de la pierre des façades. Paris est une ville de calcaire
+   * lutétien, dont l'albédo tourne autour de 0,45. La part vitrée s'en déduit
+   * ensuite : une fenêtre ne renvoie presque rien en diffus.
    */
   albedo: 0.45,
+
+  /** Part vitrée des façades — hypothèse, voir `DEFAULT_GLAZING_RATIO`. */
+  glazing: DEFAULT_GLAZING_RATIO,
 
   /**
    * Réflectance du sol de rue — nettement plus sombre que les façades.
@@ -223,20 +228,11 @@ export const CONFIG = {
   },
 
   /**
-   * Pondération de l'indice de gêne lumineuse (doit sommer à 1).
-   * Voir README pour la justification de chaque terme.
+   * Pondération de l'indice de gêne lumineuse (doit sommer à 1) : dose à l'œil,
+   * sources éblouissantes, scintillement. Définie avec le modèle, qu'elle
+   * accompagne ; voir `DEFAULT_WEIGHTS` et le README.
    */
-  weights: {
-    directSun: 0.34, // soleil direct sur le piéton
-    skyView: 0.18, // ouverture au ciel (luminance de fond, éblouissement diffus)
-    brightness: 0.16, // éclairement reçu du ciel et du soleil
-    reverb: 0.14, // ce que renvoient les façades éclairées, à hauteur des yeux
-    glare: 0.1, // soleil bas dans l'axe du regard — dépend du sens de marche
-    flicker: 0.08, // alternance ombre/soleil le long du trajet
-  },
-
-  /** Éclairement de référence pour normaliser la composante « brightness », en lux. */
-  luxReference: 90000,
+  weights: DEFAULT_WEIGHTS,
 };
 
 export function resolveZone(name) {
