@@ -761,6 +761,16 @@ n'est pas plus calibrée sur des personnes que les poids diurnes.**
   tronçons sont renseignés ; parmi eux, 6,1 % n'ont réellement aucun lampadaire
   à 80 m — bois, berges, emprises ferroviaires.
 
+**La Lune est calculée, mais n'entre pas dans l'indice.**
+[`moon.js`](pipeline/src/lib/moon.js) donne position, phase et éclairement
+(série tronquée de l'Astronomical Almanac, magnitude de Krisciunas & Schaefer,
+extinction par la masse d'air) ; elle est éprouvée contre des phases publiées.
+Une pleine lune haute donne environ 0,25 lx : un seul lampadaire en donne
+plusieurs à son pied, et son voile d'éblouissement écrase tout ce que la Lune
+ajouterait. Le chiffre s'affiche donc la nuit à côté de l'heure, pour dire si la
+nuit est noire ou claire, sans toucher aux couleurs. Ni nuages ni lumière du
+ciel : c'est l'éclairement direct.
+
 Le passage jour → nuit se fait progressivement entre +2° et −6° de hauteur
 solaire : l'éclairage public s'allume au crépuscule civil et l'œil met de
 longues minutes à s'adapter. À la bascule, les deux régimes coexistent — ce qui

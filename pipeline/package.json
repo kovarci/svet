@@ -6,6 +6,7 @@
   "description": "Récupération des données ouvertes + calcul de l'indice d'exposition lumineuse.",
   "exports": {
     "./sun": "./src/lib/sun.js",
+    "./moon": "./src/lib/moon.js",
     "./model": "./src/model.js",
     "./config": "./src/config.js"
   },

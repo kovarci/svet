@@ -51,6 +51,7 @@ import {
   wetnessFromRain,
 } from '@svet/pipeline/model';
 import { applyRefraction, localToUTC, sunPosition, DEG } from '@svet/pipeline/sun';
+import { moonIlluminance, moonPosition } from '@svet/pipeline/moon';
 
 const BASEMAP = 'https://basemaps.cartocdn.com/gl/dark-matter-gl-style/style.json';
 
@@ -1345,6 +1346,30 @@ function uvFallback(altitude) {
   return 8.5 * Math.pow(Math.sin(altitude), 1.4);
 }
 
+/**
+ * Où en est la Lune, en une phrase : levée ou non, quelle phase, combien de lux.
+ *
+ * Purement informatif. 0,25 lx de pleine lune se noient sous un seul
+ * lampadaire ; l'indice nocturne n'en tient donc pas compte.
+ */
+function moonLabel(minutes) {
+  const hour = Math.floor(minutes / 60);
+  const moon = moonPosition(
+    localToUTC(state.meta.date, hour, minutes - hour * 60),
+    PARIS_LAT,
+    PARIS_LON,
+  );
+  const phase =
+    moon.fraction > 0.97
+      ? 'pleine lune'
+      : moon.fraction < 0.03
+        ? 'nouvelle lune'
+        : `lune éclairée à ${Math.round(moon.fraction * 100)} %`;
+  if (moon.altitude <= 0) return `${phase}, couchée`;
+  const lux = moonIlluminance(moon);
+  return `${phase} à ${(moon.altitude * DEG).toFixed(0)}° · ${lux >= 0.01 ? lux.toFixed(2) : '< 0,01'} lx`;
+}
+
 function applyTime() {
   const context = contextAt(state.minutes);
   const altitudeDeg = context.sun.altitude * DEG;
@@ -1352,7 +1377,7 @@ function applyTime() {
 
   dom.clock.textContent = formatClock(state.minutes);
   dom.sunInfo.textContent = night
-    ? 'nuit — soleil sous l’horizon'
+    ? `nuit — ${moonLabel(state.minutes)}`
     : `soleil ${altitudeDeg.toFixed(0)}° · azimut ${(context.sun.azimuth * DEG).toFixed(0)}°`;
   dom.skyInfo.textContent =
     context.weather === CLEAR_SKY
