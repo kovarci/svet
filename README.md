@@ -1437,10 +1437,14 @@ Les précédentes portent sur les **données**. Celles-ci portent sur la
 14. **Le trouble de Linke n'est déduit que lorsque le faisceau est mesuré.**
     Quand Open-Meteo fournit les flux, on le relit à l'envers de l'extinction
     ESRA ; hors ligne, on retombe sur la valeur moyenne de 4.
-15. **Huit types de ciel CIE sur quinze.** La sélection suit désormais la clarté
-    de Perez, l'indice normalisé, et non plus une grandeur maison — mais la
-    luminosité Δ n'est pas encore employée, alors qu'elle distingue un couvert
-    clair d'un couvert d'orage à ε identique.
+15. **Huit types de ciel CIE sur quinze, et Δ n'agit que sous le couvert.** La
+    sélection suit la clarté de Perez ε ; la luminosité Δ glisse ε apparent
+    entre le type 1 et la luminance uniforme quand ε < 1,7 : un couvert d'orage
+    garde sa gradation franche, un voile mince et lumineux la perd. Le
+    glissement (±0,25 en logarithme de ε, autour de Δ = 0,2) est **posé, non
+    calibré** ; il est éprouvé par ses invariants (sans Δ, ou à Δ de référence,
+    le ciel d'avant ; site dégagé toujours à 1 ; aucun effet sous ciel clair),
+    pas par une mesure de luminance.
 16. **Le feuillage suit désormais Beer-Lambert partout**, y compris pour le
     facteur de vue du ciel, qui employait une opacité fixe de 0,65 — saison et
     essence confondues. Reste que le houppier est un dôme déduit du tronc, pas

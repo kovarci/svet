@@ -29,7 +29,12 @@ import {
   PEREZ_BINS,
   DEG,
 } from '../src/lib/sun.js';
-import { skyDistribution, geometricSkyView, SKY_TYPES } from '../src/lib/sky.js';
+import {
+  skyDistribution,
+  geometricSkyView,
+  OVERCAST_REFERENCE_DELTA,
+  SKY_TYPES,
+} from '../src/lib/sky.js';
 import {
   components,
   discomfortIndex,
@@ -912,4 +917,60 @@ test('l’UV devient presque entièrement diffus quand le soleil descend', () =>
     shaded(10, 0.6) > shaded(60, 0.9),
     `ombre à 10° ${shaded(10, 0.6).toFixed(3)} contre midi ${shaded(60, 0.9).toFixed(3)}`,
   );
+});
+
+// ------------------------------------------- luminosité Δ de Perez, sous couvert
+
+test('Δ : sans Δ, ou à sa valeur de référence, le ciel est celui d’avant', () => {
+  const profile = new Float64Array(16).fill(55);
+  const base = skyDistribution({ altitude: 30 / DEG, azimuth: Math.PI, epsilon: 1 });
+  const none = skyDistribution({
+    altitude: 30 / DEG,
+    azimuth: Math.PI,
+    epsilon: 1,
+    brightness: NaN,
+  });
+  const ref = skyDistribution({
+    altitude: 30 / DEG,
+    azimuth: Math.PI,
+    epsilon: 1,
+    brightness: OVERCAST_REFERENCE_DELTA,
+  });
+  assert.equal(none.factor(profile), base.factor(profile));
+  assert.ok(Math.abs(ref.factor(profile) - base.factor(profile)) < 1e-12);
+});
+
+test('Δ : un couvert clair est moins gradué qu’un couvert d’orage, à ε identique', () => {
+  // Rue profonde : on ne voit que le haut de la voûte, là où la gradation joue.
+  const canyon = new Float64Array(16).fill(65);
+  const reach = (brightness) =>
+    skyDistribution({ altitude: 30 / DEG, azimuth: Math.PI, epsilon: 1.1, brightness }).factor(
+      canyon,
+    );
+  const storm = reach(OVERCAST_REFERENCE_DELTA / 4);
+  const thin = reach(OVERCAST_REFERENCE_DELTA * 4);
+  // gradation forte = zénith très lumineux = une bande étroite de ciel en reçoit plus
+  assert.ok(
+    storm > thin,
+    `orage ${storm.toFixed(4)} doit dépasser couvert clair ${thin.toFixed(4)}`,
+  );
+});
+
+test('Δ : en site dégagé le facteur reste exactement 1, quel que soit Δ', () => {
+  for (const brightness of [0.02, 0.2, 0.6]) {
+    const d = skyDistribution({
+      altitude: 30 / DEG,
+      azimuth: 1,
+      epsilon: 1.2,
+      brightness,
+    });
+    assert.ok(Math.abs(d.factor(new Float64Array(16)) - 1) < 1e-9);
+  }
+});
+
+test('Δ : sous ciel clair, il ne change rien', () => {
+  const profile = new Float64Array(16).fill(45);
+  const at = (brightness) =>
+    skyDistribution({ altitude: 25 / DEG, azimuth: 2, epsilon: 6, brightness }).factor(profile);
+  assert.equal(at(0.02), at(0.6));
 });

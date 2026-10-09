@@ -211,7 +211,7 @@ function withDistribution(sky, altitude, azimuth, bins) {
   // le ciel isotrope : porter les secteurs de 16 à 32 aurait annulé en silence
   // toute l'anisotropie. C'est exactement le genre de panne muette que ce projet
   // a déjà payée.
-  sky.distribution = skyDistribution({ altitude, azimuth, epsilon, bins });
+  sky.distribution = skyDistribution({ altitude, azimuth, epsilon, brightness, bins });
   return sky;
 }
 

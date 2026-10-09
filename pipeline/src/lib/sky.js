@@ -294,6 +294,41 @@ function verticalTable(type, sunAltitude, sunAzimuth, bins, horizontalTotal) {
 }
 
 /**
+ * Luminosité Δ de référence d'un couvert, au-dessous de laquelle le ciel est
+ * plus sombre qu'un couvert moyen (orage), au-dessus de laquelle il est plus
+ * clair (voile mince). Δ = diffus × masse d'air / éclairement extraterrestre.
+ *
+ * **Posée, pas calibrée** : un couvert parisien tourne autour de 0,2. Cette
+ * valeur n'est confrontée à aucune mesure de luminance.
+ */
+export const OVERCAST_REFERENCE_DELTA = 0.2;
+
+/** Amplitude maximale du glissement de ε, en logarithme népérien. */
+const DELTA_SHIFT = 0.25;
+
+/**
+ * ε apparent, une fois la luminosité Δ prise en compte.
+ *
+ * ε range les ciels du couvert au clair, mais deux couverts de même ε ne sont
+ * pas le même ciel : un couvert d'orage (Δ faible) garde la gradation CIE
+ * franche, zénith trois fois l'horizon ; un voile mince et lumineux (Δ fort)
+ * la perd et tend vers la luminance uniforme. Perez range les ciels selon ces
+ * deux indices pour cette raison.
+ *
+ * Le glissement n'agit que sous le couvert, et s'éteint avant les ciels à
+ * soleil : là, c'est la part directe qui commande, pas l'épaisseur du nuage.
+ * Il ne peut qu'adoucir la gradation (ε ne descend pas sous 1) : un couvert
+ * sombre est déjà le type 1.
+ */
+function apparentEpsilon(epsilon, brightness) {
+  if (!(brightness > 0)) return epsilon;
+  const fade = Math.max(0, Math.min(1, (1.72 - epsilon) / (1.72 - 1.36)));
+  if (fade === 0) return epsilon;
+  const shift = DELTA_SHIFT * Math.tanh(Math.log(brightness / OVERCAST_REFERENCE_DELTA));
+  return epsilon * Math.exp(fade * shift);
+}
+
+/**
  * Poids relatif des trois types de ciel, d'après la part directionnelle de la
  * lumière — 0 sous la couche, 1 par ciel franchement clair.
  *
@@ -327,10 +362,12 @@ function typeWeights(epsilon) {
  * @param {number} p.altitude hauteur du soleil, en radians
  * @param {number} p.azimuth azimut du soleil, en radians depuis le nord
  * @param {number} p.epsilon clarté de Perez : 1 sous la couche, > 6 par ciel bleu
+ * @param {number} [p.brightness] luminosité Δ de Perez ; sans elle, ε seul décide
  * @param {number} [p.bins] nombre de secteurs du profil d'horizon
  */
-export function skyDistribution({ altitude, azimuth, epsilon, bins = 16 }) {
-  const weights = typeWeights(Number.isFinite(epsilon) ? epsilon : 1);
+export function skyDistribution({ altitude, azimuth, epsilon, brightness, bins = 16 }) {
+  const eps = Number.isFinite(epsilon) ? epsilon : 1;
+  const weights = typeWeights(apparentEpsilon(eps, brightness));
   const blended = new Float64Array(bins * (ELEVATION_BANDS + 1));
   const blendedWall = new Float64Array(bins * (WALL_ELEVATION_BANDS + 1));
 
